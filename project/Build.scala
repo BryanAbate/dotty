@@ -404,6 +404,13 @@ object Build {
     )
   )
 
+  lazy val tastydocSettings = Seq(
+    baseDirectory in (Compile, run) := baseDirectory.value / "..",
+    baseDirectory in Test := baseDirectory.value / "..",
+    libraryDependencies +=
+      "com.novocode" % "junit-interface" % "0.11"
+  )
+
   // Settings shared between dotty-doc and dotty-doc-bootstrapped
   lazy val dottyDocSettings = Seq(
     baseDirectory in (Compile, run) := baseDirectory.value / "..",
@@ -965,6 +972,9 @@ object Build {
     addCompilerPlugin("org.scalameta" % "semanticdb-scalac" % "4.0.0" cross CrossVersion.full)
   )
 
+  lazy val `dotty-tastydoc` = project.in(file("tastydoc")).asDottyTastydoc(Bootstrapped)
+  lazy val `dotty-tastydoc-input` = project.in(file("tastydoc/input")).asDottyTastydocInput(Bootstrapped)
+
   // Depend on dotty-library so that sbt projects using dotty automatically
   // depend on the dotty-library
   lazy val `scala-library` = project.
@@ -1323,6 +1333,14 @@ object Build {
       aggregate(`dotty-semanticdb-input`).
       dependsOn(dottyCompiler).
       settings(semanticdbSettings)
+
+    def asDottyTastydoc(implicit mode: Mode): Project = project.withCommonSettings.
+      aggregate(`dotty-tastydoc-input`).
+      dependsOn(dottyCompiler).
+      settings(tastydocSettings)
+
+    def asDottyTastydocInput(implicit mode: Mode): Project = project.withCommonSettings.
+      dependsOn(dottyCompiler)
 
     def asDist(implicit mode: Mode): Project = project.
       enablePlugins(PackPlugin).
