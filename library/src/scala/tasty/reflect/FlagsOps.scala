@@ -54,6 +54,9 @@ trait FlagsOps extends Core {
     /** Is this symbol marked as static. Mapped to static Java member */
     def Static: Flags
 
+    /** Is this symbol defined in a Java class */
+    def JavaDefined: Flags
+
     /** Is this symbol an object or its class (used for a ValDef or a ClassDef extends Modifier respectively) */
     def Object: Flags
 
@@ -90,14 +93,29 @@ trait FlagsOps extends Core {
     /** Is this symbol a method with default parameters */
     def DefaultParameterized: Flags
 
-    /** Is this symbol member that is assumed to be stable */
-    def Stable: Flags
+    /** Is this symbol member that is assumed to be stable and realizable */
+    def StableRealizable: Flags
 
     /** Is this symbol a parameter */
     def Param: Flags
 
     /** Is this symbol a parameter accessor */
     def ParamAccessor: Flags
+
+    /** Is this symbol an enum */
+    def Enum: Flags
+
+    /** Is this symbol a module class */
+    def ModuleClass: Flags
+
+    /** Is this symbol labeled private[this] */
+    def PrivateLocal: Flags
+
+    /** Is this symbol a package */
+    def Package: Flags
+
+    /** Is this symbol an implementation class of a Scala2 trait */
+    def ImplClass: Flags
   }
 
 }

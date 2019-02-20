@@ -183,8 +183,9 @@ class PlainPrinter(_ctx: Context) extends Printer {
         "<noprefix>"
       case tp: MethodType =>
         changePrec(GlobalPrec) {
+          (if (tp.isContextual) " given " else "") ~
           ("(" + (if (tp.isErasedMethod)   "erased "   else "")
-               + (if (tp.isImplicitMethod) "implicit " else "")
+               + (if (tp.isImplicitMethod && !tp.isContextual) "implicit " else "")
           ) ~ paramsText(tp) ~
           (if (tp.resultType.isInstanceOf[MethodType]) ")" else "): ") ~
           toText(tp.resultType)
@@ -471,7 +472,7 @@ class PlainPrinter(_ctx: Context) extends Printer {
 
   def toText(const: Constant): Text = const.tag match {
     case StringTag => stringText("\"" + escapedString(const.value.toString) + "\"")
-    case ClazzTag => "classOf[" ~ toText(const.typeValue.classSymbol) ~ "]"
+    case ClazzTag => "classOf[" ~ toText(const.typeValue) ~ "]"
     case CharTag => literalText(s"'${escapedChar(const.charValue)}'")
     case LongTag => literalText(const.longValue.toString + "L")
     case EnumTag => literalText(const.symbolValue.name.toString)
@@ -519,11 +520,10 @@ class PlainPrinter(_ctx: Context) extends Printer {
       result.reason match {
         case _: NoMatchingImplicits => "No Matching Implicit"
         case _: DivergingImplicit => "Diverging Implicit"
-        case _: ShadowedImplicit => "Shadowed Implicit"
         case result: AmbiguousImplicits =>
           "Ambiguous Implicit: " ~ toText(result.alt1.ref) ~ " and " ~ toText(result.alt2.ref)
         case _ =>
-          "?Unknown Implicit Result?" + result.getClass
+          "Search Failure: " ~ toText(result.tree)
     }
   }
 

@@ -67,7 +67,7 @@ import collection.mutable.ListBuffer
  */
 object Denotations {
 
-  implicit def eqDenotation: Eq[Denotation, Denotation] = Eq
+  implicit def eqDenotation: Eql[Denotation, Denotation] = Eql.derived
 
   /** A PreDenotation represents a group of single denotations or a single multi-denotation
    *  It is used as an optimization to avoid forming MultiDenotations too eagerly.
@@ -412,7 +412,7 @@ object Denotations {
         def precedes(sym1: Symbol, sym2: Symbol) = {
           def precedesIn(bcs: List[ClassSymbol]): Boolean = bcs match {
             case bc :: bcs1 => (sym1 eq bc) || !(sym2 eq bc) && precedesIn(bcs1)
-            case Nil => true
+            case Nil => false
           }
           (sym1 ne sym2) &&
             (sym1.derivesFrom(sym2) ||
@@ -747,26 +747,6 @@ object Denotations {
         (if (relaxed) Signature.ParamMatch else Signature.FullMatch)
       if (matches) this else NoDenotation
     }
-
-    // ------ Forming types -------------------------------------------
-
-    /** The TypeRef representing this type denotation at its original location. */
-    def typeRef(implicit ctx: Context): TypeRef =
-      TypeRef(symbol.owner.thisType, symbol.name.asTypeName, this)
-
-    /** The typeRef applied to its own type parameters */
-    def appliedRef(implicit ctx: Context): Type =
-      typeRef.appliedTo(symbol.typeParams.map(_.typeRef))
-
-    /** The TermRef representing this term denotation at its original location. */
-    def termRef(implicit ctx: Context): TermRef =
-      TermRef(symbol.owner.thisType, symbol.name.asTermName, this)
-
-    /** The NamedType representing this denotation at its original location.
-     *  Same as either `typeRef` or `termRef` depending whether this denotes a type or not.
-     */
-    def namedType(implicit ctx: Context): NamedType =
-      if (isType) typeRef else termRef
 
     // ------ Transformations -----------------------------------------
 
@@ -1183,7 +1163,7 @@ object Denotations {
    */
   def isDoubleDef(sym1: Symbol, sym2: Symbol)(implicit ctx: Context): Boolean =
     (sym1.exists && sym2.exists &&
-    (sym1 ne sym2) && (sym1.owner eq sym2.owner) &&
+    (sym1 `ne` sym2) && (sym1.effectiveOwner `eq` sym2.effectiveOwner) &&
     !sym1.is(Bridge) && !sym2.is(Bridge))
 
   def doubleDefError(denot1: Denotation, denot2: Denotation, pre: Type = NoPrefix)(implicit ctx: Context): Nothing = {
@@ -1193,7 +1173,7 @@ object Denotations {
       throw new MergeError(sym1, sym2, sym1.info, sym2.info, pre) {
         override def addendum(implicit ctx: Context) =
           i"""
-             |they are both defined in ${sym1.owner} but have matching signatures
+             |they are both defined in ${sym1.effectiveOwner} but have matching signatures
              |  ${denot1.info} and
              |  ${denot2.info}${super.addendum}"""
         }
@@ -1227,7 +1207,7 @@ object Denotations {
   final case class DenotUnion(denot1: PreDenotation, denot2: PreDenotation) extends MultiPreDenotation {
     def exists: Boolean = true
     def toDenot(pre: Type)(implicit ctx: Context): Denotation =
-      (denot1 toDenot pre) & (denot2 toDenot pre, pre)
+      denot1.toDenot(pre).&(denot2.toDenot(pre), pre)
     def containsSym(sym: Symbol): Boolean =
       (denot1 containsSym sym) || (denot2 containsSym sym)
     type AsSeenFromResult = PreDenotation

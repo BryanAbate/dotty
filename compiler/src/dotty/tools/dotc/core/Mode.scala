@@ -52,15 +52,13 @@ object Mode {
   /** Allow GADTFlexType labelled types to have their bounds adjusted */
   val GADTflexible: Mode = newMode(8, "GADTflexible")
 
+  /** Assume -language:strictEquality */
+  val StrictEquality: Mode = newMode(9, "StrictEquality")
+
   /** We are currently printing something: avoid to produce more logs about
    *  the printing
    */
   val Printing: Mode = newMode(10, "Printing")
-
-  /** We are currently typechecking an ident to determine whether some implicit
-   *  is shadowed - don't do any other shadowing tests.
-   */
-  val ImplicitShadowing: Mode = newMode(11, "ImplicitShadowing")
 
   /** We are currently in a `viewExists` check. In that case, ambiguous
    *  implicits checks are disabled and we succeed with the first implicit
@@ -104,6 +102,6 @@ object Mode {
   /** Read comments from definitions when unpickling from TASTY */
   val ReadComments: Mode = newMode(22, "ReadComments")
 
-  /** Suppress insertion of apply or implicit conversion on qualifier */
-  val FixedQualifier: Mode = newMode(23, "FixedQualifier")
+  /** We are synthesizing the receiver of an extension method */
+  val SynthesizeExtMethodReceiver: Mode = newMode(23, "SynthesizeExtMethodReceiver")
 }

@@ -349,10 +349,14 @@ class TreeUnpickler(reader: TastyReader,
               readMethodic(PolyType, _.toTypeName)
             case METHODtype =>
               readMethodic(MethodType, _.toTermName)
-            case IMPLICITMETHODtype =>
-              readMethodic(ImplicitMethodType, _.toTermName)
             case ERASEDMETHODtype =>
               readMethodic(ErasedMethodType, _.toTermName)
+            case CONTEXTUALMETHODtype =>
+              readMethodic(ContextualMethodType, _.toTermName)
+            case ERASEDCONTEXTUALMETHODtype =>
+              readMethodic(ErasedContextualMethodType, _.toTermName)
+            case IMPLICITMETHODtype =>
+              readMethodic(ImplicitMethodType, _.toTermName)
             case ERASEDIMPLICITMETHODtype =>
               readMethodic(ErasedImplicitMethodType, _.toTermName)
             case TYPELAMBDAtype =>
@@ -605,6 +609,7 @@ class TreeUnpickler(reader: TastyReader,
           case SEALED => addFlag(Sealed)
           case CASE => addFlag(Case)
           case IMPLICIT => addFlag(Implicit)
+          case IMPLIED => addFlag(Implied)
           case ERASED => addFlag(Erased)
           case LAZY => addFlag(Lazy)
           case OVERRIDE => addFlag(Override)
@@ -626,8 +631,9 @@ class TreeUnpickler(reader: TastyReader,
           case CONTRAVARIANT => addFlag(Contravariant)
           case SCALA2X => addFlag(Scala2x)
           case DEFAULTparameterized => addFlag(DefaultParameterized)
-          case STABLE => addFlag(Stable)
+          case STABLE => addFlag(StableRealizable)
           case EXTENSION => addFlag(Extension)
+          case GIVEN => addFlag(Given)
           case PARAMsetter =>
             addFlag(ParamAccessor)
           case PRIVATEqualified =>
@@ -839,13 +845,6 @@ class TreeUnpickler(reader: TastyReader,
             DefDef(Nil, Nil, tpt)
           }
       }
-      val mods =
-        if (sym.annotations.isEmpty) untpd.EmptyModifiers
-        else untpd.Modifiers(annotations = sym.annotations.map(_.tree))
-      tree.withMods(mods)
-        // record annotations in tree so that tree positions can be filled in.
-        // Note: Once the inline PR with its changes to positions is in, this should be
-        // no longer necessary.
       goto(end)
       setSpan(start, tree)
       if (!sym.isType) { // Only terms might have leaky aliases, see the documentation of `checkNoPrivateLeaks`
@@ -894,7 +893,7 @@ class TreeUnpickler(reader: TastyReader,
           case _ => readTpt()(parentCtx)
         }
       }
-      val parentTypes = defn.adjustForTuple(cls, cls.typeParams, parents.map(_.tpe.dealias))
+      val parentTypes = parents.map(_.tpe.dealias)
       val self =
         if (nextByte == SELFDEF) {
           readByte()
@@ -957,8 +956,10 @@ class TreeUnpickler(reader: TastyReader,
       assert(sourcePathAt(start).isEmpty)
       readByte()
       readEnd()
+      val impliedOnly = nextByte == IMPLIED
+      if (impliedOnly) readByte()
       val expr = readTerm()
-      setSpan(start, Import(expr, readSelectors()))
+      setSpan(start, Import(impliedOnly, expr, readSelectors()))
     }
 
     def readSelectors()(implicit ctx: Context): List[untpd.Tree] = nextByte match {
@@ -1015,11 +1016,20 @@ class TreeUnpickler(reader: TastyReader,
         }
       }
 
-      def completeSelect(name: Name, tpf: Type => NamedType): Select = {
+      def completeSelect(name: Name, sig: Signature): Select = {
         val localCtx =
           if (name == nme.CONSTRUCTOR) ctx.addMode(Mode.InSuperCall) else ctx
         val qual = readTerm()(localCtx)
-        ConstFold(untpd.Select(qual, name).withType(tpf(qual.tpe.widenIfUnstable)))
+        var pre = qual.tpe.widenIfUnstable
+        val denot = accessibleDenot(pre, name, sig)
+        val owner = denot.symbol.maybeOwner
+        if (owner.isPackageObject && pre.termSymbol.is(Package))
+          pre = pre.select(owner.sourceModule)
+        val tpe = name match {
+          case name: TypeName => TypeRef(pre, name, denot)
+          case name: TermName => TermRef(pre, name, denot)
+        }
+        ConstFold(untpd.Select(qual, name).withType(tpe))
       }
 
       def readQualId(): (untpd.Ident, TypeRef) = {
@@ -1041,15 +1051,13 @@ class TreeUnpickler(reader: TastyReader,
         case IDENTtpt =>
           untpd.Ident(readName().toTypeName).withType(readType())
         case SELECT =>
-          def readRest(name: TermName, sig: Signature): Tree =
-            completeSelect(name, pre => TermRef(pre, name, accessibleDenot(pre, name, sig)))
           readName() match {
-            case SignedName(name, sig) => readRest(name, sig)
-            case name => readRest(name, Signature.NotAMethod)
+            case SignedName(name, sig) => completeSelect(name, sig)
+            case name => completeSelect(name, Signature.NotAMethod)
           }
         case SELECTtpt =>
           val name = readName().toTypeName
-          completeSelect(name, pre => TypeRef(pre, name, accessibleDenot(pre, name, Signature.NotAMethod)))
+          completeSelect(name, Signature.NotAMethod)
         case QUALTHIS =>
           val (qual, tref) = readQualId()
           untpd.This(qual).withType(ThisType.raw(tref))
@@ -1167,14 +1175,11 @@ class TreeUnpickler(reader: TastyReader,
               // types. This came up in #137 of collection strawman.
               val tycon = readTpt()
               val args = until(end)(readTpt())
-              untpd.AppliedTypeTree(tycon, args).withType(tycon.tpe.safeAppliedTo(args.tpes))
-            case ANDtpt =>
-              val tpt1 = readTpt()
-              val tpt2 = readTpt()
-              // FIXME: We need to do this instead of "AndType(tpt1, tpt2)" to avoid self-type cyclic reference in tasty_tools
-              untpd.AndTypeTree(tpt1, tpt2).withType(AndType(tpt1.tpe, tpt2.tpe))
-            case ORtpt =>
-              OrTypeTree(readTpt(), readTpt())
+              val ownType =
+                if (tycon.symbol == defn.andType) AndType(args(0).tpe, args(1).tpe)
+                else if (tycon.symbol == defn.orType) OrType(args(0).tpe, args(1).tpe)
+                else tycon.tpe.safeAppliedTo(args.tpes)
+              untpd.AppliedTypeTree(tycon, args).withType(ownType)
             case ANNOTATEDtpt =>
               Annotated(readTpt(), readTerm())
             case LAMBDAtpt =>

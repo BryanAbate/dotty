@@ -182,7 +182,7 @@ class CodeTester(projects: List[Project]) {
    *
    * @see dotty.tools.languageserver.util.actions.WorksheetRun
    */
-  def run(marker: CodeMarker, expected: String*): this.type =
+  def run(marker: CodeMarker, expected: (CodeRange, String)*): this.type =
     doAction(new WorksheetRun(marker, expected, strict = true))
 
   /**
@@ -194,7 +194,7 @@ class CodeTester(projects: List[Project]) {
    *
    * @see dotty.tools.languageserver.util.actions.WorksheetRun
    */
-  def runNonStrict(marker: CodeMarker, expected: String*): this.type =
+  def runNonStrict(marker: CodeMarker, expected: (CodeRange, String)*): this.type =
     doAction(new WorksheetRun(marker, expected, strict = false))
 
   /**
@@ -237,7 +237,7 @@ class CodeTester(projects: List[Project]) {
 
   private def doAction(action: Action): this.type = {
     try {
-      action.execute()(testServer, testServer.client, positions)
+      action.execute() given (testServer, testServer.client, positions)
     } catch {
       case ex: AssertionError =>
         val sourcesStr =
@@ -252,7 +252,7 @@ class CodeTester(projects: List[Project]) {
             |
             |$sourcesStr
             |
-            |while executing action: ${action.show(positions)}
+            |while executing action: ${action.show given positions}
             |
           """.stripMargin
         val assertionError = new AssertionError(msg + ex.getMessage)

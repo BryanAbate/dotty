@@ -13,7 +13,7 @@ import ast.Trees._
 import NameOps._
 import collection.mutable
 import reporting.diagnostic.messages._
-import Checking.checkNoPrivateLeaks
+import Checking.{checkNoPrivateLeaks, checkNoWildcard}
 
 trait TypeAssigner {
   import tpd._
@@ -204,27 +204,17 @@ trait TypeAssigner {
             var packageAccess = false
             val what = alts match {
               case Nil =>
-                i"$name cannot be accessed as a member of $pre"
+                name.toString
               case sym :: Nil =>
-                if (sym.owner.is(Package)) {
-                  packageAccess = true
-                  i"${sym.showLocated} cannot be accessed"
-                }
-                else {
-                  val symStr = if (sym.owner == pre.typeSymbol) sym.show else sym.showLocated
-                  i"$symStr cannot be accessed as a member of $pre"
-                }
+                if (sym.owner == pre.typeSymbol) sym.show else sym.showLocated
               case _ =>
-                em"none of the overloaded alternatives named $name can be accessed as members of $pre"
+                em"none of the overloaded alternatives named $name"
             }
-            val where =
-              if (!ctx.owner.exists) ""
-              else if (packageAccess) i" from nested ${ctx.owner.enclosingPackageClass}"
-              else i" from ${ctx.owner.enclosingClass}"
+            val where = if (ctx.owner.exists) s" from ${ctx.owner.enclosingClass}" else ""
             val whyNot = new StringBuffer
             alts foreach (_.isAccessibleFrom(pre, superAccess, whyNot))
             if (tpe.isError) tpe
-            else errorType(ex"$what$where.$whyNot", pos)
+            else errorType(ex"$what cannot be accessed as a member of $pre$where.$whyNot", pos)
           }
         }
         else ctx.makePackageObjPrefixExplicit(tpe withDenot d)
@@ -234,38 +224,46 @@ trait TypeAssigner {
     test(tpe, true)
   }
 
-  /** The type of a selection with `name` of a tree with type `site`.
-   */
-  def selectionType(site: Type, name: Name, pos: SourcePosition)(implicit ctx: Context): Type = {
-    val mbr = site.member(name)
-    if (reallyExists(mbr))
-      site.select(name, mbr)
-    else if (site.derivesFrom(defn.DynamicClass) && !Dynamic.isDynamicMethod(name))
-      TryDynamicCallType
-    else if (site.isErroneous || name.toTermName == nme.ERROR)
-      UnspecifiedErrorType
-    else {
-      def kind = if (name.isTypeName) "type" else "value"
-      def addendum =
-        if (site.derivesFrom(defn.DynamicClass)) "\npossible cause: maybe a wrong Dynamic method signature?"
-        else ""
-      errorType(
-        if (name == nme.CONSTRUCTOR) ex"$site does not have a constructor"
-        else NotAMember(site, name, kind),
-        pos)
-    }
-  }
-
-  /** The selection type, which is additionally checked for accessibility.
-   */
-  def accessibleSelectionType(tree: untpd.RefTree, qual1: Tree)(implicit ctx: Context): Type = {
+  /** The type of the selection `tree`, where `qual1` is the typed qualifier part. */
+  def selectionType(tree: untpd.RefTree, qual1: Tree)(implicit ctx: Context): Type = {
     var qualType = qual1.tpe.widenIfUnstable
     if (!qualType.hasSimpleKind && tree.name != nme.CONSTRUCTOR)
       // constructors are selected on typeconstructor, type arguments are passed afterwards
       qualType = errorType(em"$qualType takes type parameters", qual1.sourcePos)
     else if (!qualType.isInstanceOf[TermType])
       qualType = errorType(em"$qualType is illegal as a selection prefix", qual1.sourcePos)
-    val ownType = selectionType(qualType, tree.name, tree.sourcePos)
+    val name = tree.name
+    val mbr = qualType.member(name)
+    if (reallyExists(mbr))
+      qualType.select(name, mbr)
+    else if (qualType.derivesFrom(defn.DynamicClass) && !Dynamic.isDynamicMethod(name))
+      TryDynamicCallType
+    else if (qualType.isErroneous || name.toTermName == nme.ERROR)
+      UnspecifiedErrorType
+    else if (name == nme.CONSTRUCTOR)
+      errorType(ex"$qualType does not have a constructor", tree.sourcePos)
+    else {
+      val kind = if (name.isTypeName) "type" else "value"
+      val addendum =
+        if (qualType.derivesFrom(defn.DynamicClass))
+          "\npossible cause: maybe a wrong Dynamic method signature?"
+        else qual1.getAttachment(Typer.HiddenSearchFailure) match {
+          case Some(failure) if !failure.reason.isInstanceOf[Implicits.NoMatchingImplicits] =>
+            i""".
+              |An extension method was tried, but could not be fully constructed:
+              |
+              |    ${failure.tree.show.replace("\n", "\n    ")}"""
+          case _ => ""
+        }
+      errorType(NotAMember(qualType, name, kind, addendum), tree.sourcePos)
+    }
+  }
+
+  /** The type of the selection in `tree`, where `qual1` is the typed qualifier part.
+   *  The selection type is additionally checked for accessibility.
+   */
+  def accessibleSelectionType(tree: untpd.RefTree, qual1: Tree)(implicit ctx: Context): Type = {
+    val ownType = selectionType(tree, qual1)
     if (tree.getAttachment(desugar.SuppressAccessCheck).isDefined) ownType
     else ensureAccessible(ownType, qual1.isInstanceOf[Super], tree.sourcePos)
   }
@@ -520,12 +518,6 @@ trait TypeAssigner {
   def assignType(tree: untpd.SingletonTypeTree, ref: Tree)(implicit ctx: Context): SingletonTypeTree =
     tree.withType(ref.tpe)
 
-  def assignType(tree: untpd.AndTypeTree, left: Tree, right: Tree)(implicit ctx: Context): AndTypeTree =
-    tree.withType(AndType(left.tpe, right.tpe))
-
-  def assignType(tree: untpd.OrTypeTree, left: Tree, right: Tree)(implicit ctx: Context): OrTypeTree =
-    tree.withType(OrType(left.tpe, right.tpe))
-
   /** Assign type of RefinedType.
    *  Refinements are typed as if they were members of refinement class `refineCls`.
    */
@@ -545,7 +537,11 @@ trait TypeAssigner {
     assert(!hasNamedArg(args))
     val tparams = tycon.tpe.typeParams
     val ownType =
-      if (sameLength(tparams, args)) tycon.tpe.appliedTo(args.tpes)
+      if (sameLength(tparams, args)) {
+        if (tycon.symbol == defn.andType) AndType(args(0).tpe, args(1).tpe)
+        else if (tycon.symbol == defn.orType) OrType(args(0).tpe, args(1).tpe)
+        else tycon.tpe.appliedTo(args.tpes)
+      }
       else wrongNumberOfTypeArgs(tycon.tpe, tparams, args, tree.sourcePos)
     tree.withType(ownType)
   }

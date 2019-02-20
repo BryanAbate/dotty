@@ -54,6 +54,9 @@ class ExtractDependencies extends Phase {
     super.isRunnable && (ctx.sbtCallback != null || forceRun)
   }
 
+  // Check no needed. Does not transform trees
+  override def isCheckable: Boolean = false
+
   // This phase should be run directly after `Frontend`, if it is run after
   // `PostTyper`, some dependencies will be lost because trees get simplified.
   // See the scripted test `constants` for an example where this matters.
@@ -336,8 +339,11 @@ private class ExtractDependenciesCollector extends tpd.TreeTraverser { thisTreeT
     tree match {
       case Match(selector, _) =>
         addPatMatDependency(selector.tpe)
-      case Import(expr, selectors) =>
-        def lookupImported(name: Name) = expr.tpe.member(name).symbol
+      case Import(impliedOnly, expr, selectors) =>
+        def lookupImported(name: Name) = {
+          val sym = expr.tpe.member(name).symbol
+          if (sym.is(Implied) == impliedOnly) sym else NoSymbol
+        }
         def addImported(name: Name) = {
           // importing a name means importing both a term and a type (if they exist)
           addMemberRefDependency(lookupImported(name.toTermName))

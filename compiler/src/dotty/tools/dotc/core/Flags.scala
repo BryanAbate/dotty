@@ -130,6 +130,7 @@ object Flags {
    */
   case class FlagConjunction(bits: Long) {
     override def toString: String = FlagSet(bits).toString
+    def | (fs: FlagSet): FlagConjunction = FlagConjunction((FlagSet(bits) | fs).bits)
   }
 
   def termFlagConjunction(x: Long) = FlagConjunction(TERMS | x)
@@ -242,8 +243,8 @@ object Flags {
   final val TypeParam: FlagSet = Param.toTypeFlags
 
   /** Labeled with `implicit` modifier (implicit value) */
-  final val ImplicitCommon: FlagSet = commonFlag(9, "implicit")
-  final val Implicit: FlagSet = ImplicitCommon.toTermFlags
+  final val Implicit: FlagSet = commonFlag(9, "implicit")
+  final val ImplicitTerm: FlagSet = Implicit.toTermFlags
 
   /** Labeled with `lazy` (a lazy val). */
   final val Lazy: FlagSet = termFlag(10, "lazy")
@@ -312,7 +313,6 @@ object Flags {
   final val Contravariant: FlagSet = typeFlag(21, "<contravariant>")
   final val Label: FlagSet = termFlag(21, "<label>")
 
-
   /** A trait that has only abstract methods as members
    *  and therefore can be represented by a Java interface.
    *  Warning: flag is set during regular typer pass, should be tested only after typer.
@@ -329,7 +329,7 @@ object Flags {
   final val Abstract: FlagSet = commonFlag(23, "abstract")
 
   /** Lazy val or method is known or assumed to be stable and realizable */
-  final val Stable: FlagSet = termFlag(24, "<stable>")
+  final val StableRealizable: FlagSet = termFlag(24, "<stable>")
 
   /** A case parameter accessor */
   final val CaseAccessor: FlagSet = termFlag(25, "<caseaccessor>")
@@ -347,6 +347,9 @@ object Flags {
 
   /** An extension method */
   final val Extension = termFlag(28, "<extension>")
+
+  /** An inferable (`given`) parameter */
+  final val Given = commonFlag(29, "given")
 
   /** Symbol is defined by a Java class */
   final val JavaDefined: FlagSet = commonFlag(30, "<java>")
@@ -381,6 +384,8 @@ object Flags {
 
   /** Symbol is a Java default method */
   final val DefaultMethod: FlagSet = termFlag(38, "<defaultmethod>")
+
+  final val Implied: FlagSet = commonFlag(39, "implied")
 
   /** Symbol is an enum class or enum case (if used with case) */
   final val Enum: FlagSet = commonFlag(40, "<enum>")
@@ -458,7 +463,7 @@ object Flags {
 
   /** Flags representing source modifiers */
   private val CommonSourceModifierFlags: FlagSet =
-    commonFlags(Private, Protected, Final, Case, Implicit, Override, JavaStatic)
+    commonFlags(Private, Protected, Final, Case, Implicit, Implied, Override, JavaStatic)
 
   final val TypeSourceModifierFlags: FlagSet =
     CommonSourceModifierFlags.toTypeFlags | Abstract | Sealed | Opaque
@@ -483,7 +488,7 @@ object Flags {
     HigherKinded.toCommonFlags | Param | ParamAccessor.toCommonFlags |
     Scala2ExistentialCommon | MutableOrOpaque | Touched | JavaStatic |
     CovariantOrOuter | ContravariantOrLabel | CaseAccessor.toCommonFlags |
-    Extension.toCommonFlags | NonMember | ImplicitCommon | Permanent | Synthetic |
+    Extension.toCommonFlags | NonMember | Implicit | Implied | Permanent | Synthetic |
     SuperAccessorOrScala2x | Inline
 
   /** Flags that are not (re)set when completing the denotation, or, if symbol is
@@ -509,7 +514,7 @@ object Flags {
   final val RetainedTypeArgFlags: FlagSet = VarianceFlags | Protected | Local
 
   /** Modules always have these flags set */
-  final val ModuleValCreationFlags: FlagSet = ModuleVal | Lazy | Final | Stable
+  final val ModuleValCreationFlags: FlagSet = ModuleVal | Lazy | Final | StableRealizable
 
   /** Module classes always have these flags set */
   final val ModuleClassCreationFlags: FlagSet = ModuleClass | Final
@@ -539,8 +544,8 @@ object Flags {
 
   /** Flags that can apply to a module val */
   final val RetainedModuleValFlags: FlagSet = RetainedModuleValAndClassFlags |
-    Override | Final | Method | Implicit | Lazy |
-    Accessor | AbsOverride | Stable | Captured | Synchronized | Erased
+    Override | Final | Method | Implicit | Implied | Lazy |
+    Accessor | AbsOverride | StableRealizable | Captured | Synchronized | Erased
 
   /** Flags that can apply to a module class */
   final val RetainedModuleClassFlags: FlagSet = RetainedModuleValAndClassFlags |
@@ -584,8 +589,12 @@ object Flags {
   /** An inline method or inline argument proxy */
   final val InlineOrProxy: FlagSet = Inline | InlineProxy
 
+  final val ImplicitOrImplied = Implicit | Implied
+
+  final val ImplicitOrImpliedTerm = ImplicitOrImplied.toTermFlags
+
   /** Assumed to be pure */
-  final val StableOrErased: FlagSet = Stable | Erased
+  final val StableOrErased: FlagSet = StableRealizable | Erased
 
   /** Labeled `private`, `final`, or `inline` */
   final val EffectivelyFinal: FlagSet = Private | Final | Inline
@@ -598,9 +607,6 @@ object Flags {
 
   /** An inline method */
   final val InlineMethod: FlagConjunction = allOf(Inline, Method)
-
-  /** An implicit inline method */
-  final val ImplicitInlineMethod: FlagConjunction = allOf(Inline, Implicit, Method)
 
   /** An inline parameter */
   final val InlineParam: FlagConjunction = allOf(Inline, Param)
@@ -631,6 +637,9 @@ object Flags {
 
   /** value that's final or inline */
   final val FinalOrInline: FlagSet = Final | Inline
+
+  /** class that's final or sealed */
+  final val FinalOrSealed: FlagSet = Final | Sealed
 
   /** A covariant type parameter instance */
   final val LocalCovariant: FlagConjunction = allOf(Local, Covariant)
@@ -678,7 +687,7 @@ object Flags {
   final val JavaEnumTrait: FlagConjunction = allOf(JavaDefined, Enum)
 
   /** A Java enum value */
-  final val JavaEnumValue: FlagConjunction = allOf(Stable, JavaStatic, JavaDefined, Enum)
+  final val JavaEnumValue: FlagConjunction = allOf(StableRealizable, JavaStatic, JavaDefined, Enum)
 
   /** Labeled private[this] */
   final val PrivateLocal: FlagConjunction = allOf(Private, Local)
@@ -687,7 +696,7 @@ object Flags {
   final val PrivateLocalParamAccessor: FlagConjunction = allOf(Private, Local, ParamAccessor)
 
   /** A parameter forwarder */
-  final val ParamForwarder: FlagConjunction = allOf(Method, Stable, ParamAccessor)
+  final val ParamForwarder: FlagConjunction = allOf(Method, StableRealizable, ParamAccessor)
 
   /** A private[this] parameter */
   final val PrivateLocalParam: FlagConjunction = allOf(Private, Local, Param)

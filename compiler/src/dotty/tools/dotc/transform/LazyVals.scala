@@ -28,15 +28,13 @@ class LazyVals extends MiniPhase with IdentityDenotTransformer {
   class OffsetInfo(var defs: List[Tree], var ord:Int)
   private[this] val appendOffsetDefs = mutable.Map.empty[Symbol, OffsetInfo]
 
-  override def phaseName: String = "lazyVals"
+  override def phaseName: String = LazyVals.name
 
   /** List of names of phases that should have finished processing of tree
     * before this phase starts processing same tree */
   override def runsAfter: Set[String] = Set(Mixin.name, CollectNullableFields.name)
 
   override def changesMembers: Boolean = true  // the phase adds lazy val accessors
-
-  def transformer: LazyVals = new LazyVals
 
   val containerFlags: FlagSet = Synthetic | Mutable | Lazy
   val initFlags: FlagSet      = Synthetic | Method
@@ -435,6 +433,8 @@ class LazyVals extends MiniPhase with IdentityDenotTransformer {
 }
 
 object LazyVals {
+  val name: String = "lazyVals"
+
   object lazyNme {
     import Names.TermName
     object RLazyVals {

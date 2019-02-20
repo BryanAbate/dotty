@@ -80,7 +80,7 @@ trait TreeUtils
         case IsDefinition(cdef @ ClassDef(_, constr, parents, derived, self, body)) =>
           implicit val ctx = localCtx(cdef)
           foldTrees(foldTrees(foldTypeTrees(foldParents(foldTree(x, constr), parents), derived), self), body)
-        case Import(expr, selectors) =>
+        case Import(_, expr, _) =>
           foldTree(x, expr)
         case IsPackageClause(clause @ PackageClause(pid, stats)) =>
           foldTrees(foldTree(x, pid), stats)(clause.symbol.localContext)
@@ -93,8 +93,6 @@ trait TreeUtils
       case TypeTree.Select(qualifier, _) => foldTree(x, qualifier)
       case TypeTree.Projection(qualifier, _) => foldTypeTree(x, qualifier)
       case TypeTree.Singleton(ref) => foldTree(x, ref)
-      case TypeTree.And(left, right) => foldTypeTree(foldTypeTree(x, left), right)
-      case TypeTree.Or(left, right) => foldTypeTree(foldTypeTree(x, left), right)
       case TypeTree.Refined(tpt, refinements) => foldTrees(foldTypeTree(x, tpt), refinements)
       case TypeTree.Applied(tpt, args) => foldTypeTrees(foldTypeTree(x, tpt), args)
       case TypeTree.ByName(result) => foldTypeTree(x, result)
@@ -160,7 +158,7 @@ trait TreeUtils
         case IsPackageClause(tree) =>
           PackageClause.copy(tree)(transformTerm(tree.pid).asInstanceOf[Term.Ref], transformTrees(tree.stats)(tree.symbol.localContext))
         case IsImport(tree) =>
-          Import.copy(tree)(transformTerm(tree.expr), tree.selectors)
+          Import.copy(tree)(tree.impliedOnly, transformTerm(tree.expr), tree.selectors)
         case IsStatement(tree) =>
           transformStatement(tree)
       }
@@ -185,7 +183,7 @@ trait TreeUtils
         case IsClassDef(tree) =>
           ClassDef.copy(tree)(tree.name, tree.constructor, tree.parents, tree.derived, tree.self, tree.body)
         case IsImport(tree) =>
-          Import.copy(tree)(transformTerm(tree.expr), tree.selectors)
+          Import.copy(tree)(tree.impliedOnly, transformTerm(tree.expr), tree.selectors)
       }
     }
 
@@ -254,10 +252,6 @@ trait TreeUtils
         TypeTree.Refined.copy(tree)(transformTypeTree(tree.tpt), transformTrees(tree.refinements).asInstanceOf[List[Definition]])
       case TypeTree.IsApplied(tree) =>
         TypeTree.Applied.copy(tree)(transformTypeTree(tree.tpt), transformTypeOrBoundsTrees(tree.args))
-      case TypeTree.IsAnd(tree) =>
-        TypeTree.And.copy(tree)(transformTypeTree(tree.left), transformTypeTree(tree.right))
-      case TypeTree.IsOr(tree) =>
-        TypeTree.Or.copy(tree)(transformTypeTree(tree.left), transformTypeTree(tree.right))
       case TypeTree.IsMatchType(tree) =>
         TypeTree.MatchType.copy(tree)(tree.bound.map(b => transformTypeTree(b)), transformTypeTree(tree.selector), transformTypeCaseDefs(tree.cases))
       case TypeTree.IsByName(tree) =>

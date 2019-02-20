@@ -119,14 +119,16 @@ class PostTyper extends MacroTransform with IdentityDenotTransformer { thisPhase
     private def transformSelect(tree: Select, targs: List[Tree])(implicit ctx: Context): Tree = {
       val qual = tree.qualifier
       qual.symbol.moduleClass.denot match {
-        case pkg: PackageClassDenotation if !tree.symbol.maybeOwner.is(Package) =>
-          transformSelect(cpy.Select(tree)(qual select pkg.packageObj.symbol, tree.name), targs)
+        case pkg: PackageClassDenotation =>
+          val pobj = pkg.packageObjFor(tree.symbol)
+          if (pobj.exists)
+            return transformSelect(cpy.Select(tree)(qual.select(pobj), tree.name), targs)
         case _ =>
-          val tree1 = super.transform(tree)
-          constToLiteral(tree1) match {
-            case _: Literal => tree1
-            case _ => superAcc.transformSelect(tree1, targs)
-          }
+      }
+      val tree1 = super.transform(tree)
+      constToLiteral(tree1) match {
+        case _: Literal => tree1
+        case _ => superAcc.transformSelect(tree1, targs)
       }
     }
 
@@ -278,7 +280,14 @@ class PostTyper extends MacroTransform with IdentityDenotTransformer { thisPhase
         case tree @ Annotated(annotated, annot) =>
           cpy.Annotated(tree)(transform(annotated), transformAnnot(annot))
         case tree: AppliedTypeTree =>
-          Checking.checkAppliedType(tree, boundsCheck = !ctx.mode.is(Mode.Pattern))
+          if (tree.tpt.symbol == defn.andType)
+            Checking.checkNonCyclicInherited(tree.tpe, tree.args.tpes, EmptyScope, tree.posd)
+              // Ideally, this should be done by Typer, but we run into cyclic references
+              // when trying to typecheck self types which are intersections.
+          else if (tree.tpt.symbol == defn.orType)
+            () // nothing to do
+          else
+            Checking.checkAppliedType(tree, boundsCheck = !ctx.mode.is(Mode.Pattern))
           super.transform(tree)
         case SingletonTypeTree(ref) =>
           Checking.checkRealizable(ref.tpe, ref.posd)
@@ -290,15 +299,10 @@ class PostTyper extends MacroTransform with IdentityDenotTransformer { thisPhase
               case tpe => tpe
             }
           )
-        case tree: AndTypeTree =>
-          // Ideally, this should be done by Typer, but we run into cyclic references
-          // when trying to typecheck self types which are intersections.
-          Checking.checkNonCyclicInherited(tree.tpe, tree.left.tpe :: tree.right.tpe :: Nil, EmptyScope, tree.posd)
-          super.transform(tree)
         case tree: LambdaTypeTree =>
           VarianceChecker.checkLambda(tree)
           super.transform(tree)
-        case Import(expr, selectors) =>
+        case Import(_, expr, selectors) =>
           val exprTpe = expr.tpe
           val seen = mutable.Set.empty[Name]
           def checkIdent(ident: untpd.Ident): Unit = {

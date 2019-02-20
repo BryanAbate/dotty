@@ -178,6 +178,8 @@ object Tokens extends TokensCommon {
   final val FORSOME = 61;          enter(FORSOME, "forSome") // TODO: deprecate
   final val ENUM = 62;             enter(ENUM, "enum")
   final val ERASED = 63;           enter(ERASED, "erased")
+  final val IMPLIED = 64;          enter(IMPLIED, "implied")
+  final val GIVEN = 65;            enter(GIVEN, "given")
 
   /** special symbols */
   final val NEWLINE = 78;          enter(NEWLINE, "end of statement", "new line")
@@ -198,7 +200,7 @@ object Tokens extends TokensCommon {
   /** XML mode */
   final val XMLSTART = 96;         enter(XMLSTART, "$XMLSTART$<") // TODO: deprecate
 
-  final val alphaKeywords: TokenSet = tokenRange(IF, ERASED)
+  final val alphaKeywords: TokenSet = tokenRange(IF, GIVEN)
   final val symbolicKeywords: TokenSet = tokenRange(USCORE, VIEWBOUND)
   final val symbolicTokens: TokenSet = tokenRange(COMMA, VIEWBOUND)
   final val keywords: TokenSet = alphaKeywords | symbolicKeywords
@@ -212,7 +214,7 @@ object Tokens extends TokensCommon {
     USCORE, NULL, THIS, SUPER, TRUE, FALSE, RETURN, XMLSTART)
 
   final val canStartExpressionTokens: TokenSet = atomicExprTokens | BitSet(
-    LBRACE, LPAREN, QBRACE, QPAREN, IF, DO, WHILE, FOR, NEW, TRY, THROW)
+    LBRACE, LPAREN, QBRACE, QPAREN, QBRACKET, IF, DO, WHILE, FOR, NEW, TRY, THROW)
 
   final val canStartTypeTokens: TokenSet = literalTokens | identifierTokens | BitSet(
     THIS, SUPER, USCORE, LPAREN, AT)
@@ -221,7 +223,7 @@ object Tokens extends TokensCommon {
 
   final val templateIntroTokens: TokenSet = BitSet(CLASS, TRAIT, OBJECT, ENUM, CASECLASS, CASEOBJECT)
 
-  final val dclIntroTokens: TokenSet = BitSet(DEF, VAL, VAR, TYPE)
+  final val dclIntroTokens: TokenSet = BitSet(DEF, VAL, VAR, TYPE, IMPLIED)
 
   final val defIntroTokens: TokenSet = templateIntroTokens | dclIntroTokens
 
@@ -248,6 +250,8 @@ object Tokens extends TokensCommon {
     TYPE, RPAREN, RBRACE, RBRACKET)
 
   final val numericLitTokens: TokenSet = BitSet(INTLIT, LONGLIT, FLOATLIT, DOUBLELIT)
+
+  final val scala3keywords = BitSet(ENUM, ERASED, GIVEN, IMPLIED)
 
   final val softModifierNames = Set(nme.inline, nme.opaque)
 }

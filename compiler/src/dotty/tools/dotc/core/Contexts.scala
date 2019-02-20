@@ -13,6 +13,7 @@ import Scopes._
 import Uniques._
 import ast.Trees._
 import ast.untpd
+import Flags.ImplicitOrImplied
 import util.{FreshNameCreator, NoSource, SimpleIdentityMap, SourceFile}
 import typer.{Implicits, ImportInfo, Inliner, NamerContextOps, SearchHistory, SearchRoot, TypeAssigner, Typer}
 import Implicits.ContextualImplicits
@@ -214,7 +215,7 @@ object Contexts {
         implicitsCache = {
           val implicitRefs: List[ImplicitRef] =
             if (isClassDefContext)
-              try owner.thisType.implicitMembers
+              try owner.thisType.implicitMembers(ImplicitOrImplied)
               catch {
                 case ex: CyclicReference => Nil
               }
@@ -377,7 +378,6 @@ object Contexts {
      *   - as scope: The parameters of the auxiliary constructor.
      */
     def thisCallArgContext: Context = {
-      assert(owner.isClassConstructor)
       val constrCtx = outersIterator.dropWhile(_.outer.owner == owner).next()
       superOrThisCallContext(owner, constrCtx.scope)
         .setTyperState(typerState)
@@ -404,7 +404,8 @@ object Contexts {
         case ref: RefTree[_] => Some(ref.name.asTermName)
         case _               => None
       }
-      ctx.fresh.setImportInfo(new ImportInfo(implicit ctx => sym, imp.selectors, impNameOpt))
+      ctx.fresh.setImportInfo(
+        new ImportInfo(implicit ctx => sym, imp.selectors, impNameOpt, imp.impliedOnly))
     }
 
     /** Does current phase use an erased types interpretation? */
@@ -471,6 +472,7 @@ object Contexts {
     def typerPhase: Phase                  = base.typerPhase
     def sbtExtractDependenciesPhase: Phase = base.sbtExtractDependenciesPhase
     def picklerPhase: Phase                = base.picklerPhase
+    def reifyQuotesPhase: Phase            = base.reifyQuotesPhase
     def refchecksPhase: Phase              = base.refchecksPhase
     def patmatPhase: Phase                 = base.patmatPhase
     def elimRepeatedPhase: Phase           = base.elimRepeatedPhase

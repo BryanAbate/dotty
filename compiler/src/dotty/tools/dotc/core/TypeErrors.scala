@@ -17,7 +17,8 @@ import config.Printers.cyclicErrors
 
 class TypeError(msg: String) extends Exception(msg) {
   def this() = this("")
-  def toMessage(implicit ctx: Context): Message = getMessage
+  def toMessage(implicit ctx: Context): Message = super.getMessage
+  override def getMessage: String = super.getMessage
 }
 
 class MalformedType(pre: Type, denot: Denotation, absMembers: Set[Name]) extends TypeError {
@@ -136,7 +137,7 @@ class CyclicReference private (val denot: SymDenotation) extends TypeError {
         }
       }
       // Give up and give generic errors.
-      else if (cycleSym.is(Implicit, butNot = Method) && cycleSym.owner.isTerm)
+      else if (cycleSym.is(ImplicitOrImplied, butNot = Method) && cycleSym.owner.isTerm)
         CyclicReferenceInvolvingImplicit(cycleSym)
       else
         CyclicReferenceInvolving(denot)
@@ -169,7 +170,15 @@ class MergeError(val sym1: Symbol, val sym2: Symbol, val tp1: Type, val tp2: Typ
   }
 
   protected def addendum(implicit ctx: Context): String =
-    if (prefix `eq` NoPrefix) "" else i"\nas members of type $prefix"
+    if (prefix `eq` NoPrefix) ""
+    else {
+      val owner = prefix match {
+        case prefix: ThisType => prefix.cls.show
+        case prefix: TermRef => prefix.symbol.show
+        case _ => i"type $prefix"
+      }
+      s"\nas members of $owner"
+    }
 
   override def toMessage(implicit ctx: Context): Message = {
     if (ctx.debug) printStackTrace()

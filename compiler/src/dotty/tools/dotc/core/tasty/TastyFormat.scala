@@ -58,7 +58,7 @@ Standard-Section: "ASTs" TopLevelStat*
                   ValOrDefDef
                   TYPEDEF        Length NameRef (type_Term | Template) Modifier*
                   OBJECTDEF      Length NameRef Template Modifier*
-                  IMPORT         Length qual_Term Selector*
+                  IMPORT         Length [IMPLIED] qual_Term Selector*
   ValOrDefDef   = VALDEF         Length NameRef type_Term rhs_Term? Modifier*
                   DEFDEF         Length NameRef TypeParam* Params* returnType_Term rhs_Term?
                                         Modifier*
@@ -106,8 +106,6 @@ Standard-Section: "ASTs" TopLevelStat*
                   LAMBDAtpt      Length TypeParam* body_Term
                   TYPEBOUNDStpt  Length low_Term high_Term?
                   ANNOTATEDtpt   Length underlying_Term fullAnnotation_Term
-                  ANDtpt         Length left_Term right_Term
-                  ORtpt          Length left_Term right_Term
                   MATCHtpt       Length bound_Term? sel_Term CaseDef*
                   BYNAMEtpt             underlying_Term
                   SHAREDterm            term_ASTRef
@@ -180,6 +178,7 @@ Standard-Section: "ASTs" TopLevelStat*
                   SEALED
                   CASE
                   IMPLICIT
+                  IMPLIED
                   ERASED
                   LAZY
                   OVERRIDE
@@ -203,6 +202,7 @@ Standard-Section: "ASTs" TopLevelStat*
                   DEFAULTparameterized                // Method with default parameters
                   STABLE                              // Method that is assumed to be stable
                   EXTENSION                           // An extension method
+                  GIVEN                               // new style implicit parameters, introduced with `given`
                   PARAMsetter                         // A setter without a body named `x_=` where `x` is pickled as a PARAM
                   Annotation
 
@@ -244,7 +244,7 @@ Standard Section: "Comments" Comment*
 object TastyFormat {
 
   final val header: Array[Int] = Array(0x5C, 0xA1, 0xAB, 0x1F)
-  val MajorVersion: Int = 12
+  val MajorVersion: Int = 13
   val MinorVersion: Int = 0
 
   /** Tags used to serialize names */
@@ -322,7 +322,9 @@ object TastyFormat {
   final val ERASED = 34
   final val OPAQUE = 35
   final val EXTENSION = 36
-  final val PARAMsetter = 37
+  final val GIVEN = 37
+  final val IMPLIED = 38
+  final val PARAMsetter = 39
 
   // Cat. 2:    tag Nat
 
@@ -415,9 +417,7 @@ object TastyFormat {
   final val TYPEBOUNDS = 163
   final val TYPEBOUNDStpt = 164
   final val ANDtype = 165
-  final val ANDtpt = 166
   final val ORtype = 167
-  final val ORtpt = 168
   final val POLYtype = 169
   final val TYPELAMBDAtype = 170
   final val LAMBDAtpt = 171
@@ -427,21 +427,23 @@ object TastyFormat {
   final val TYPEREFin = 175
   final val OBJECTDEF = 176
 
-  // In binary: 101101EI
-  // I = implicit method type
-  // E = erased method type
   final val METHODtype = 180
-  final val IMPLICITMETHODtype = 181
-  final val ERASEDMETHODtype = 182
-  final val ERASEDIMPLICITMETHODtype = 183
+  final val ERASEDMETHODtype = 181
+  final val CONTEXTUALMETHODtype = 182
+  final val ERASEDCONTEXTUALMETHODtype = 183
+  final val IMPLICITMETHODtype = 184
+  final val ERASEDIMPLICITMETHODtype = 185
 
   final val MATCHtype = 190
   final val MATCHtpt = 191
 
-  def methodType(isImplicit: Boolean = false, isErased: Boolean = false): Int = {
-    val implicitOffset = if (isImplicit) 1 else 0
-    val erasedOffset = if (isErased) 2 else 0
-    METHODtype + implicitOffset + erasedOffset
+  def methodType(isContextual: Boolean, isImplicit: Boolean, isErased: Boolean): Int = {
+    val implicitOffset =
+      if (isContextual) 2
+      else if (isImplicit) 4
+      else 0
+    val erasedOffset = if (isErased) 1 else 0
+    METHODtype + erasedOffset + implicitOffset
   }
 
   final val HOLE = 255
@@ -471,6 +473,7 @@ object TastyFormat {
        | SEALED
        | CASE
        | IMPLICIT
+       | IMPLIED
        | ERASED
        | LAZY
        | OVERRIDE
@@ -493,6 +496,7 @@ object TastyFormat {
        | DEFAULTparameterized
        | STABLE
        | EXTENSION
+       | GIVEN
        | PARAMsetter
        | ANNOTATION
        | PRIVATEqualified
@@ -509,8 +513,6 @@ object TastyFormat {
        | LAMBDAtpt
        | TYPEBOUNDStpt
        | ANNOTATEDtpt
-       | ANDtpt
-       | ORtpt
        | BYNAMEtpt
        | MATCHtpt
        | BIND => true
@@ -530,6 +532,7 @@ object TastyFormat {
     case SEALED => "SEALED"
     case CASE => "CASE"
     case IMPLICIT => "IMPLICIT"
+    case IMPLIED => "IMPLIED"
     case ERASED => "ERASED"
     case LAZY => "LAZY"
     case OVERRIDE => "OVERRIDE"
@@ -553,6 +556,7 @@ object TastyFormat {
     case DEFAULTparameterized => "DEFAULTparameterized"
     case STABLE => "STABLE"
     case EXTENSION => "EXTENSION"
+    case GIVEN => "GIVEN"
     case PARAMsetter => "PARAMsetter"
 
     case SHAREDterm => "SHAREDterm"
@@ -637,15 +641,15 @@ object TastyFormat {
     case TYPEBOUNDStpt => "TYPEBOUNDStpt"
     case TYPEALIAS => "TYPEALIAS"
     case ANDtype => "ANDtype"
-    case ANDtpt => "ANDtpt"
     case ORtype => "ORtype"
-    case ORtpt => "ORtpt"
     case BYNAMEtype => "BYNAMEtype"
     case BYNAMEtpt => "BYNAMEtpt"
     case POLYtype => "POLYtype"
     case METHODtype => "METHODtype"
-    case IMPLICITMETHODtype => "IMPLICITMETHODtype"
     case ERASEDMETHODtype => "ERASEDMETHODtype"
+    case CONTEXTUALMETHODtype => "CONTEXTUALMETHODtype"
+    case ERASEDCONTEXTUALMETHODtype => "ERASEDCONTEXTUALMETHODtype"
+    case IMPLICITMETHODtype => "IMPLICITMETHODtype"
     case ERASEDIMPLICITMETHODtype => "ERASEDIMPLICITMETHODtype"
     case TYPELAMBDAtype => "TYPELAMBDAtype"
     case LAMBDAtpt => "LAMBDAtpt"
@@ -665,8 +669,10 @@ object TastyFormat {
     case VALDEF | DEFDEF | TYPEDEF | OBJECTDEF | TYPEPARAM | PARAM | NAMEDARG | RETURN | BIND |
          SELFDEF | REFINEDtype | TERMREFin | TYPEREFin | HOLE => 1
     case RENAMED | PARAMtype => 2
-    case POLYtype | METHODtype | IMPLICITMETHODtype | ERASEDMETHODtype | ERASEDIMPLICITMETHODtype |
-         TYPELAMBDAtype => -1
+    case POLYtype | TYPELAMBDAtype |
+         METHODtype | ERASEDMETHODtype |
+         CONTEXTUALMETHODtype | ERASEDCONTEXTUALMETHODtype |
+         IMPLICITMETHODtype | ERASEDIMPLICITMETHODtype => -1
     case _ => 0
   }
 }

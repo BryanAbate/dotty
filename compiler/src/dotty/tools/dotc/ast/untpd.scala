@@ -68,7 +68,7 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
     override def isType: Boolean = body.isType
   }
 
-  /** A function type with `implicit` or `erased` modifiers */
+  /** A function type with `implicit`, `erased`, or `contextual` modifiers */
   class FunctionWithMods(args: List[Tree], body: Tree, val mods: Modifiers)(implicit @constructorOnly src: SourceFile)
     extends Function(args, body)
 
@@ -130,7 +130,9 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
 
     case class Var()(implicit @constructorOnly src: SourceFile) extends Mod(Flags.Mutable)
 
-    case class Implicit()(implicit @constructorOnly src: SourceFile) extends Mod(Flags.ImplicitCommon)
+    case class Implicit()(implicit @constructorOnly src: SourceFile) extends Mod(Flags.Implicit)
+
+    case class Given()(implicit @constructorOnly src: SourceFile) extends Mod(Flags.Implicit | Flags.Given)
 
     case class Erased()(implicit @constructorOnly src: SourceFile) extends Mod(Flags.Erased)
 
@@ -149,6 +151,8 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
     case class Inline()(implicit @constructorOnly src: SourceFile) extends Mod(Flags.Inline)
 
     case class Enum()(implicit @constructorOnly src: SourceFile) extends Mod(Flags.Enum)
+
+    case class Instance()(implicit @constructorOnly src: SourceFile) extends Mod(Flags.Implied)
   }
 
   /** Modifiers and annotations for definitions
@@ -213,6 +217,7 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
     def hasFlags: Boolean = flags != EmptyFlags
     def hasAnnotations: Boolean = annotations.nonEmpty
     def hasPrivateWithin: Boolean = privateWithin != tpnme.EMPTY
+    def hasMod(cls: Class[_]) = mods.exists(_.getClass == cls)
 
     private def isEnum = is(Enum, butNot = JavaDefined)
 
@@ -269,6 +274,9 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
    */
   val OriginalSymbol: Property.Key[Symbol] = new Property.Key
 
+  /** Property key for contextual Apply trees of the form `fn with arg` */
+  val WithApply: Property.StickyKey[Unit] = new Property.StickyKey
+
   // ------ Creation methods for untyped only -----------------
 
   def Ident(name: Name)(implicit src: SourceFile): Ident = new Ident(name)
@@ -301,8 +309,6 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
   def Inlined(call: tpd.Tree, bindings: List[MemberDef], expansion: Tree)(implicit src: SourceFile): Inlined = new Inlined(call, bindings, expansion)
   def TypeTree()(implicit src: SourceFile): TypeTree = new TypeTree()
   def SingletonTypeTree(ref: Tree)(implicit src: SourceFile): SingletonTypeTree = new SingletonTypeTree(ref)
-  def AndTypeTree(left: Tree, right: Tree)(implicit src: SourceFile): AndTypeTree = new AndTypeTree(left, right)
-  def OrTypeTree(left: Tree, right: Tree)(implicit src: SourceFile): OrTypeTree = new OrTypeTree(left, right)
   def RefinedTypeTree(tpt: Tree, refinements: List[Tree])(implicit src: SourceFile): RefinedTypeTree = new RefinedTypeTree(tpt, refinements)
   def AppliedTypeTree(tpt: Tree, args: List[Tree])(implicit src: SourceFile): AppliedTypeTree = new AppliedTypeTree(tpt, args)
   def LambdaTypeTree(tparams: List[TypeDef], body: Tree)(implicit src: SourceFile): LambdaTypeTree = new LambdaTypeTree(tparams, body)
@@ -318,7 +324,7 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
   def Template(constr: DefDef, parents: List[Tree], derived: List[Tree], self: ValDef, body: LazyTreeList)(implicit src: SourceFile): Template =
     if (derived.isEmpty) new Template(constr, parents, self, body)
     else new DerivingTemplate(constr, parents ++ derived, self, body, derived.length)
-  def Import(expr: Tree, selectors: List[Tree])(implicit src: SourceFile): Import = new Import(expr, selectors)
+  def Import(impliedOnly: Boolean, expr: Tree, selectors: List[Tree])(implicit src: SourceFile): Import = new Import(impliedOnly, expr, selectors)
   def PackageDef(pid: RefTree, stats: List[Tree])(implicit src: SourceFile): PackageDef = new PackageDef(pid, stats)
   def Annotated(arg: Tree, annot: Tree)(implicit src: SourceFile): Annotated = new Annotated(arg, annot)
 
@@ -395,12 +401,15 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
     case _ => Tuple(ts)
   }
 
+  def makeAndType(left: Tree, right: Tree)(implicit ctx: Context): AppliedTypeTree =
+    AppliedTypeTree(ref(defn.andType.typeRef), left :: right :: Nil)
+
   def makeParameter(pname: TermName, tpe: Tree, mods: Modifiers = EmptyModifiers)(implicit ctx: Context): ValDef =
     ValDef(pname, tpe, EmptyTree).withMods(mods | Param)
 
-  def makeSyntheticParameter(n: Int = 1, tpt: Tree = null)(implicit ctx: Context): ValDef =
+  def makeSyntheticParameter(n: Int = 1, tpt: Tree = null, flags: FlagSet = EmptyFlags)(implicit ctx: Context): ValDef =
     ValDef(nme.syntheticParamName(n), if (tpt == null) TypeTree() else tpt, EmptyTree)
-      .withFlags(SyntheticTermParam)
+      .withFlags(flags | SyntheticTermParam)
 
   def lambdaAbstract(tparams: List[TypeDef], tpt: Tree)(implicit ctx: Context): Tree =
     if (tparams.isEmpty) tpt else LambdaTypeTree(tparams, tpt)

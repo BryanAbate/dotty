@@ -3,13 +3,13 @@ import scala.tasty.Reflection
 
 object Foo {
 
-  type Macro[X] = implicit Reflection => Expr[X]
-  type Tastier[X] = implicit Reflection => X
+  type Macro[X] = given Reflection => Expr[X]
+  type Tastier[X] = given Reflection => X
 
   implicit inline def foo: String =
     ~fooImpl
 
-  def fooImpl(implicit reflect: Reflection): implicit Reflection => Tastier[implicit Reflection => Macro[String]] = {
+  def fooImpl(implicit reflect: Reflection): given Reflection => Tastier[given Reflection => Macro[String]] = {
     '("abc")
   }
 

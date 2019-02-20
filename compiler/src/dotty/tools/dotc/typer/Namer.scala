@@ -118,9 +118,9 @@ trait NamerContextOps { this: Context =>
   /** The given type, unless `sym` is a constructor, in which case the
    *  type of the constructed instance is returned
    */
-  def effectiveResultType(sym: Symbol, typeParams: List[Symbol], given: Type): Type =
+  def effectiveResultType(sym: Symbol, typeParams: List[Symbol], givenTp: Type): Type =
     if (sym.name == nme.CONSTRUCTOR) sym.owner.typeRef.appliedTo(typeParams.map(_.typeRef))
-    else given
+    else givenTp
 
   /** if isConstructor, make sure it has one non-implicit parameter list */
   def normalizeIfConstructor(termParamss: List[List[Symbol]], isConstructor: Boolean): List[List[Symbol]] =
@@ -134,10 +134,10 @@ trait NamerContextOps { this: Context =>
   def methodType(typeParams: List[Symbol], valueParamss: List[List[Symbol]], resultType: Type, isJava: Boolean = false)(implicit ctx: Context): Type = {
     val monotpe =
       (valueParamss :\ resultType) { (params, resultType) =>
-        val (isImplicit, isErased) =
-          if (params.isEmpty) (false, false)
-          else (params.head is Implicit, params.head is Erased)
-        val make = MethodType.maker(isJava, isImplicit, isErased)
+        val (isImplicit, isErased, isContextual) =
+          if (params.isEmpty) (false, false, false)
+          else (params.head is Implicit, params.head is Erased, params.head.is(Given))
+        val make = MethodType.maker(isJava = isJava, isImplicit = isImplicit, isErased = isErased, isContextual = isContextual)
         if (isJava)
           for (param <- params)
             if (param.info.isDirectRef(defn.ObjectClass)) param.info = defn.AnyType
@@ -310,6 +310,15 @@ class Namer { typer: Typer =>
         else name
     }
 
+    /** If effective owner is a package `p`, widen `private` to `private[p]` */
+    def widenToplevelPrivate(sym: Symbol): Unit = {
+      var owner = sym.effectiveOwner
+      if (owner.is(Package)) {
+        sym.resetFlag(Private)
+        sym.privateWithin = owner
+      }
+    }
+
     /** Create new symbol or redefine existing symbol under lateCompile. */
     def createOrRefine[S <: Symbol](
         tree: MemberDef, name: Name, flags: FlagSet, infoFn: S => Type,
@@ -325,13 +334,15 @@ class Namer { typer: Typer =>
           prev
         }
         else symFn(flags, infoFn, privateWithinClass(tree.mods))
+      if (sym.is(Private))
+        widenToplevelPrivate(sym)
       recordSym(sym, tree)
     }
 
     tree match {
       case tree: TypeDef if tree.isClassDef =>
         val name = checkNoConflict(tree.name).asTypeName
-        val flags = checkFlags(tree.mods.flags &~ Implicit)
+        val flags = checkFlags(tree.mods.flags &~ ImplicitOrImplied)
         val cls =
           createOrRefine[ClassSymbol](tree, name, flags,
             cls => adjustIfModule(new ClassCompleter(cls, tree)(ctx), tree),
@@ -416,17 +427,22 @@ class Namer { typer: Typer =>
   }
 
   /** Expand tree and store in `expandedTree` */
-  def expand(tree: Tree)(implicit ctx: Context): Unit = tree match {
-    case mdef: DefTree =>
-      val expanded = desugar.defTree(mdef)
-      typr.println(i"Expansion: $mdef expands to $expanded")
-      if (expanded ne mdef) mdef.pushAttachment(ExpandedTree, expanded)
-    case _ =>
+  def expand(tree: Tree)(implicit ctx: Context): Unit = {
+    def record(expanded: Tree) =
+      if (expanded `ne` tree) {
+        typr.println(i"Expansion: $tree expands to $expanded")
+        tree.pushAttachment(ExpandedTree, expanded)
+      }
+    tree match {
+      case tree: DefTree => record(desugar.defTree(tree))
+      case tree: PackageDef => record(desugar.packageDef(tree))
+      case _ =>
+    }
   }
 
   /** The expanded version of this tree, or tree itself if not expanded */
   def expanded(tree: Tree)(implicit ctx: Context): Tree = tree match {
-    case ddef: DefTree => ddef.attachmentOrElse(ExpandedTree, ddef)
+    case _: DefTree | _: PackageDef => tree.attachmentOrElse(ExpandedTree, tree)
     case _ => tree
   }
 
@@ -703,11 +719,11 @@ class Namer { typer: Typer =>
           val classSym = ctx.effectiveScope.lookup(className.encode)
           if (classSym.isDefinedInCurrentRun) {
             val moduleName = className.toTermName
-            val moduleSym = ctx.effectiveScope.lookup(moduleName.encode)
-            if (!moduleSym.isDefinedInCurrentRun) {
-              val absentModuleSymbol = ctx.newModuleSymbol(ctx.owner, moduleName, EmptyFlags, EmptyFlags, (_, _) => NoType)
-              enterSymbol(absentModuleSymbol)
-            }
+            for (moduleSym <- ctx.effectiveScope.lookupAll(moduleName.encode))
+              if (moduleSym.is(Module) && !moduleSym.isDefinedInCurrentRun) {
+                val absentModuleSymbol = ctx.newModuleSymbol(ctx.owner, moduleName, EmptyFlags, EmptyFlags, (_, _) => NoType)
+                enterSymbol(absentModuleSymbol)
+              }
           }
         }
       }
@@ -938,7 +954,7 @@ class Namer { typer: Typer =>
               val ptype = typedAheadType(tpt).tpe appliedTo targs1.tpes
               if (ptype.typeParams.isEmpty) ptype
               else {
-                if (denot.is(ModuleClass) && denot.sourceModule.is(Implicit))
+                if (denot.is(ModuleClass) && denot.sourceModule.is(ImplicitOrImplied))
                   missingType(denot.symbol, "parent ")(creationContext)
                 fullyDefinedType(typedAheadExpr(parent).tpe, "class parent", parent.span)
               }
@@ -1013,7 +1029,7 @@ class Namer { typer: Typer =>
 
       if (impl.derived.nonEmpty) {
         val (derivingClass, derivePos) = original.removeAttachment(desugar.DerivingCompanion) match {
-          case Some(pos) => (cls.companionClass.asClass, pos)
+          case Some(pos) => (cls.companionClass.orElse(cls).asClass, pos)
           case None => (cls, impl.sourcePos.startPos)
         }
         val deriver = new Deriver(derivingClass, derivePos)(localCtx)
@@ -1056,7 +1072,7 @@ class Namer { typer: Typer =>
       cls.info = avoidPrivateLeaks(cls, cls.sourcePos)
       cls.baseClasses.foreach(_.invalidateBaseTypeCache()) // we might have looked before and found nothing
       cls.setNoInitsFlags(parentsKind(parents), bodyKind(rest))
-      if (cls.isNoInitsClass) cls.primaryConstructor.setFlag(Stable)
+      if (cls.isNoInitsClass) cls.primaryConstructor.setFlag(StableRealizable)
     }
   }
 

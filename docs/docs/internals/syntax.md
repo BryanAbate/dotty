@@ -92,10 +92,11 @@ semi             ::=  ‘;’ |  nl {nl}
 
 ```
 abstract  case      catch     class     def       do        else      enum
-erased    extends   false     final     finally   for       if        implicit
-import    lazy      match     new       null      object    package   private
-protected override  return    super     sealed    then      throw     trait
-true      try       type      val       var       while     with      yield
+erased    extends   false     final     finally   for       given     if
+implicit  import    instance  lazy      match     new       null      object
+package   private   protected override  return    super     sealed    then
+throw     trait     true      try       type      val       var       while
+with      yield
 :         =         <-        =>        <:        :>        #         @
 ```
 
@@ -136,11 +137,10 @@ ClassQualifier    ::=  ‘[’ id ‘]’
 
 ### Types
 ```ebnf
-Type              ::=  [FunArgMods] FunArgTypes ‘=>’ Type                       Function(ts, t)
+Type              ::=  { ‘erased’ | ‘given’} FunArgTypes ‘=>’ Type              Function(ts, t)
                     |  HkTypeParamClause ‘=>’ Type                              TypeLambda(ps, t)
                     |  MatchType
                     |  InfixType
-FunArgMods        ::=  { ‘implicit’ | ‘erased’ }
 FunArgTypes       ::=  InfixType
                     |  ‘(’ [ FunArgType {‘,’ FunArgType } ] ‘)’
                     |  ‘(’ TypedFunParam {‘,’ TypedFunParam } ‘)’
@@ -156,7 +156,7 @@ SimpleType        ::=  SimpleType TypeArgs                                      
                     |  [‘-’ | ‘+’ | ‘~’ | ‘!’] StableId                         PrefixOp(expr, op)
                     |  Path ‘.’ ‘type’                                          SingletonTypeTree(p)
                     |  ‘(’ ArgTypes ‘)’                                         Tuple(ts)
-                    |  ‘_’ TypeBounds
+                    |  ‘_’ SubtypeBounds
                     |  Refinement                                               RefinedTypeTree(EmptyTree, refinement)
                     |  SimpleLiteral                                            SingletonTypeTree(l)
 ArgTypes          ::=  Type {‘,’ Type}
@@ -169,15 +169,15 @@ TypeArgs          ::=  ‘[’ ArgTypes ‘]’                                 
 NamedTypeArg      ::=  id ‘=’ Type                                              NamedArg(id, t)
 NamedTypeArgs     ::=  ‘[’ NamedTypeArg {‘,’ NamedTypeArg} ‘]’                  nts
 Refinement        ::=  ‘{’ [RefineDcl] {semi [RefineDcl]} ‘}’                   ds
-TypeBounds        ::=  [‘>:’ Type] [‘<:’ Type] | INT                            TypeBoundsTree(lo, hi)
-TypeParamBounds   ::=  TypeBounds {‘<%’ Type} {‘:’ Type}                        ContextBounds(typeBounds, tps)
+SubtypeBounds     ::=  [‘>:’ Type] [‘<:’ Type] | INT                            TypeBoundsTree(lo, hi)
+TypeParamBounds   ::=  SubtypeBounds {‘<%’ Type} {‘:’ Type}                     ContextBounds(typeBounds, tps)
 ```
 
 ### Expressions
 ```ebnf
-Expr              ::=  [FunArgMods] FunParams ‘=>’ Expr                         Function(args, expr), Function(ValDef([implicit], id, TypeTree(), EmptyTree), expr)
+Expr              ::=  [ClosureMods] FunParams ‘=>’ Expr                        Function(args, expr), Function(ValDef([implicit], id, TypeTree(), EmptyTree), expr)
                     |  Expr1
-BlockResult       ::=  [FunArgMods] FunParams ‘=>’ Block
+BlockResult       ::=  [ClosureMods] FunParams ‘=>’ Block
                     |  Expr1
 FunParams         ::=  Bindings
                     |  id
@@ -204,6 +204,7 @@ Catches           ::=  ‘catch’ Expr
 PostfixExpr       ::=  InfixExpr [id]                                           PostfixOp(expr, op)
 InfixExpr         ::=  PrefixExpr
                     |  InfixExpr id [nl] InfixExpr                              InfixOp(expr, op, expr)
+                    |  InfixExpr ‘given’ (InfixExpr | ParArgumentExprs)
 PrefixExpr        ::=  [‘-’ | ‘+’ | ‘~’ | ‘!’] SimpleExpr                       PrefixOp(expr, op)
 SimpleExpr        ::=  ‘new’ (ConstrApp [TemplateBody] | TemplateBody)          New(constr | templ)
                     |  BlockExpr
@@ -280,14 +281,15 @@ DefTypeParamClause::=  ‘[’ DefTypeParam {‘,’ DefTypeParam} ‘]’
 DefTypeParam      ::=  {Annotation} id [HkTypeParamClause] TypeParamBounds
 
 TypTypeParamClause::=  ‘[’ TypTypeParam {‘,’ TypTypeParam} ‘]’
-TypTypeParam      ::=  {Annotation} id [HkTypeParamClause] TypeBounds
+TypTypeParam      ::=  {Annotation} id [HkTypeParamClause] SubtypeBounds
 
 HkTypeParamClause ::=  ‘[’ HkTypeParam {‘,’ HkTypeParam} ‘]’
 HkTypeParam       ::=  {Annotation} [‘+’ | ‘-’] (Id[HkTypeParamClause] | ‘_’)
-                       TypeBounds
+                       SubtypeBounds
 
-ClsParamClauses   ::=  {ClsParamClause} [[nl] ‘(’ [FunArgMods] ClsParams ‘)’]
-ClsParamClause    ::=  [nl] ‘(’ [ClsParams] ‘)’
+ClsParamClauses   ::=  {ClsParamClause}
+ClsParamClause    ::=  [nl] ‘(’ [[FunArgMods] ClsParams] ‘)’
+                    |  ‘given’ (‘(’ ([[FunArgMods] ClsParams] ‘)’ | ContextTypes)
 ClsParams         ::=  ClsParam {‘,’ ClsParam}
 ClsParam          ::=  {Annotation}                                             ValDef(mods, id, tpe, expr) -- point of mods on val/var
                        [{Modifier} (‘val’ | ‘var’) | ‘inline’] Param
@@ -295,9 +297,13 @@ Param             ::=  id ‘:’ ParamType [‘=’ Expr]
                     |  INT
 
 DefParamClauses   ::=  {DefParamClause} [[nl] ‘(’ [FunArgMods] DefParams ‘)’]
-DefParamClause    ::=  [nl] ‘(’ [DefParams] ‘)’
+DefParamClause    ::=  [nl] ‘(’ [DefParams] ‘)’ | InferParamClause
+InferParamClause  ::=  ‘given’ (‘(’ [DefParams] ‘)’ | ContextTypes)
 DefParams         ::=  DefParam {‘,’ DefParam}
 DefParam          ::=  {Annotation} [‘inline’] Param                            ValDef(mods, id, tpe, expr) -- point of mods at id.
+ContextTypes      ::=  RefinedType {‘,’ RefinedType}
+FunArgMods        ::=  { ‘implicit’ | ‘erased’ }
+ClosureMods       ::=  { ‘implicit’ | ‘erased’ | ‘given’}
 ```
 
 ### Bindings and Imports
@@ -321,7 +327,7 @@ AccessQualifier   ::=  ‘[’ (id | ‘this’) ‘]’
 
 Annotation        ::=  ‘@’ SimpleType {ParArgumentExprs}                        Apply(tpe, args)
 
-Import            ::=  ‘import’ ImportExpr {‘,’ ImportExpr}
+Import            ::=  ‘import’ [‘implied’] ImportExpr {‘,’ ImportExpr}
 ImportExpr        ::=  StableId ‘.’ (id | ‘_’ | ImportSelectors)                Import(expr, sels)
 ImportSelectors   ::=  ‘{’ {ImportSelector ‘,’} (ImportSelector | ‘_’) ‘}’
 ImportSelector    ::=  id [‘=>’ id | ‘=>’ ‘_’]                                  Ident(name), Pair(id, id)
@@ -340,19 +346,20 @@ VarDcl            ::=  ids ‘:’ Type                                         
 DefDcl            ::=  DefSig [‘:’ Type]                                        DefDef(_, name, tparams, vparamss, tpe, EmptyTree)
 DefSig            ::=  ‘(’ DefParam ‘)’ [nl] id
                        [DefTypeParamClause] DefParamClauses
-TypeDcl           ::=  id [TypeParamClause] (TypeBounds | ‘=’ Type)             TypeDefTree(_, name, tparams, bounds)
+TypeDcl           ::=  id [TypeParamClause] (SubtypeBounds | ‘=’ Type)             TypeDefTree(_, name, tparams, bounds)
                     |  id [TypeParamClause] <: Type = MatchType
 
 Def               ::=  ‘val’ PatDef
                     |  ‘var’ VarDef
                     |  ‘def’ DefDef
                     |  ‘type’ {nl} TypeDcl
+                    |  ‘instance’ {nl} InstanceDef
                     |  TmplDef
                     |  INT
 PatDef            ::=  Pattern2 {‘,’ Pattern2} [‘:’ Type] ‘=’ Expr              PatDef(_, pats, tpe?, expr)
 VarDef            ::=  PatDef
                     |  ids ‘:’ Type ‘=’ ‘_’
-DefDef            ::=  DefSig [(‘:’ | ‘<:’) Type] ‘=’ Expr                               DefDef(_, name, tparams, vparamss, tpe, expr)
+DefDef            ::=  DefSig [(‘:’ | ‘<:’) Type] ‘=’ Expr                      DefDef(_, name, tparams, vparamss, tpe, expr)
                     |  DefSig [nl] ‘{’ Block ‘}’                                DefDef(_, name, tparams, vparamss, tpe, Block)
                     |  ‘this’ DefParamClause DefParamClauses                    DefDef(_, <init>, Nil, vparamss, EmptyTree, expr | Block)
                        (‘=’ ConstrExpr | [nl] ConstrBlock)
@@ -360,11 +367,16 @@ DefDef            ::=  DefSig [(‘:’ | ‘<:’) Type] ‘=’ Expr          
 TmplDef           ::=  ([‘case’] ‘class’ | ‘trait’) ClassDef
                     |  [‘case’] ‘object’ ObjectDef
                     |  ‘enum’ EnumDef
+                    |  ‘witness’ WitnessDef
 ClassDef          ::=  id ClassConstr [Template]                                ClassDef(mods, name, tparams, templ)
 ClassConstr       ::=  [ClsTypeParamClause] [ConstrMods] ClsParamClauses        with DefDef(_, <init>, Nil, vparamss, EmptyTree, EmptyTree) as first stat
 ConstrMods        ::=  {Annotation} [AccessModifier]
 ObjectDef         ::=  id [Template]                                            ModuleDef(mods, name, template)  // no constructor
 EnumDef           ::=  id ClassConstr InheritClauses EnumBody                   EnumDef(mods, name, tparams, template)
+InstanceDef       ::=  [id] InstanceParams InstanceBody
+InstanceParams    ::=  [DefTypeParamClause] {InferParamClause}
+InstanceBody      ::=  [‘of’ ConstrApp {‘,’ ConstrApp }] [TemplateBody]
+                    |  ‘of’ Type ‘=’ Expr
 Template          ::=  InheritClauses [TemplateBody]                            Template(constr, parents, self, stats)
 InheritClauses    ::=  [‘extends’ ConstrApps] [‘derives’ QualId {‘,’ QualId}]
 ConstrApps        ::=  ConstrApp {‘with’ ConstrApp}
@@ -390,10 +402,11 @@ EnumStat          ::=  TemplateStat
 EnumCase          ::=  ‘case’ (id ClassConstr [‘extends’ ConstrApps]] | ids)
 
 TopStatSeq        ::=  TopStat {semi TopStat}
-TopStat           ::=  {Annotation [nl]} {Modifier} TmplDef
-                    |  Import
+TopStat           ::=  Import
+                    |  {Annotation [nl]} {Modifier} Def
                     |  Packaging
                     |  PackageObject
+                    |
 Packaging         ::=  ‘package’ QualId [nl] ‘{’ TopStatSeq ‘}’                 Package(qid, stats)
 PackageObject     ::=  ‘package’ ‘object’ ObjectDef                             object with package in mods.
 

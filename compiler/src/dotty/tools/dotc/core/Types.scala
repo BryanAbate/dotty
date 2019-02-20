@@ -40,7 +40,7 @@ object Types {
 
   @sharable private[this] var nextId = 0
 
-  implicit def eqType: Eq[Type, Type] = Eq
+  implicit def eqType: Eql[Type, Type] = Eql.derived
 
   /** Main class representing types.
    *
@@ -72,6 +72,7 @@ object Types {
    *                       +- OrType
    *                       +- MethodOrPoly ---+-- PolyType
    *                                          +-- MethodType ---+- ImplicitMethodType
+   *                                                            +- ContextualMethodType
    *                       |                                    +- JavaMethodType
    *                       +- ClassInfo
    *                       |
@@ -147,9 +148,13 @@ object Types {
     /** Is this a value type or a wildcard? */
     final def isValueTypeOrWildcard: Boolean = isValueType || this.isInstanceOf[WildcardType]
 
-    /** Does this type denote a stable reference (i.e. singleton type)? */
+    /** Does this type denote a stable reference (i.e. singleton type)?
+      *
+      * Like in isStableMember, "stability" means idempotence.
+      * Rationale: If an expression has a stable type, the expression must be idempotent, so stable types
+      * must be singleton types of stable expressions. */
     final def isStable(implicit ctx: Context): Boolean = stripTypeVar match {
-      case tp: TermRef => tp.symbol.isStable && tp.prefix.isStable || tp.info.isStable
+      case tp: TermRef => tp.symbol.isStableMember && tp.prefix.isStable || tp.info.isStable
       case _: SingletonType | NoPrefix => true
       case tp: RefinedOrRecType => tp.parent.isStable
       case tp: ExprType => tp.resultType.isStable
@@ -279,8 +284,9 @@ object Types {
     /** Is this type produced as a repair for an error? */
     final def isError(implicit ctx: Context): Boolean = stripTypeVar.isInstanceOf[ErrorType]
 
-    /** Is some part of this type produced as a repair for an error? */
-    def isErroneous(implicit ctx: Context): Boolean = existsPart(_.isError, forceLazy = false)
+    /** Is some part of the widened version of this type produced as a repair for an error? */
+    def isErroneous(implicit ctx: Context): Boolean =
+      widen.existsPart(_.isError, forceLazy = false)
 
     /** Does the type carry an annotation that is an instance of `cls`? */
     @tailrec final def hasAnnotation(cls: ClassSymbol)(implicit ctx: Context): Boolean = stripTypeVar match {
@@ -330,8 +336,14 @@ object Types {
     /** Is this a MethodType which is from Java */
     def isJavaMethod: Boolean = false
 
-    /** Is this a MethodType which has implicit parameters */
+    /** Is this a MethodType which has implicit or contextual parameters */
     def isImplicitMethod: Boolean = false
+
+    /** Is this a Method or PolyType which has contextual parameters as first value parameter list? */
+    def isContextual: Boolean = false
+
+    /** Is this a Method or PolyType which has implicit parameters as first value parameter list? */
+    def isImplicit: Boolean = false
 
     /** Is this a MethodType for which the parameters will not be used */
     def isErasedMethod: Boolean = false
@@ -542,7 +554,7 @@ object Types {
         case tp: TermRef =>
           go (tp.underlying match {
             case mt: MethodType
-            if mt.paramInfos.isEmpty && (tp.symbol is Stable) => mt.resultType
+            if mt.paramInfos.isEmpty && (tp.symbol is StableRealizable) => mt.resultType
             case tp1 => tp1
           })
         case tp: TypeRef =>
@@ -776,10 +788,13 @@ object Types {
           (name, buf) => buf += member(name).asSingleDenotation)
     }
 
-    /** The set of implicit members of this type */
-    final def implicitMembers(implicit ctx: Context): List[TermRef] = track("implicitMembers") {
+    /** The set of implicit term members of this type
+     *  @param kind   A subset of {Implicit, Implied} that sepcifies what kind of implicit should
+     *                be returned
+     */
+    final def implicitMembers(kind: FlagSet)(implicit ctx: Context): List[TermRef] = track("implicitMembers") {
       memberDenots(implicitFilter,
-          (name, buf) => buf ++= member(name).altsWith(_ is Implicit))
+          (name, buf) => buf ++= member(name).altsWith(_.is(ImplicitOrImpliedTerm & kind)))
         .toList.map(d => TermRef(this, d.symbol.asTerm))
     }
 
@@ -1005,7 +1020,7 @@ object Types {
     /** Widen type if it is unstable (i.e. an ExprType, or TermRef to unstable symbol */
     final def widenIfUnstable(implicit ctx: Context): Type = stripTypeVar match {
       case tp: ExprType => tp.resultType.widenIfUnstable
-      case tp: TermRef if !tp.symbol.isStable => tp.underlying.widenIfUnstable
+      case tp: TermRef if !tp.symbol.isStableMember => tp.underlying.widenIfUnstable
       case _ => this
     }
 
@@ -1438,7 +1453,7 @@ object Types {
     def toFunctionType(dropLast: Int = 0)(implicit ctx: Context): Type = this match {
       case mt: MethodType if !mt.isParamDependent =>
         val formals1 = if (dropLast == 0) mt.paramInfos else mt.paramInfos dropRight dropLast
-        val isImplicit = mt.isImplicitMethod && !ctx.erasedTypes
+        val isContextual = mt.isContextual && !ctx.erasedTypes
         val isErased = mt.isErasedMethod && !ctx.erasedTypes
         val result1 = mt.nonDependentResultApprox match {
           case res: MethodType => res.toFunctionType()
@@ -1446,7 +1461,7 @@ object Types {
         }
         val funType = defn.FunctionOf(
           formals1 mapConserve (_.underlyingIfRepeated(mt.isJavaMethod)),
-          result1, isImplicit, isErased)
+          result1, isContextual, isErased)
         if (mt.isResultDependent) RefinedType(funType, nme.apply, mt)
         else funType
     }
@@ -1654,7 +1669,7 @@ object Types {
 
   /** A trait for proto-types, used as expected types in typer */
   trait ProtoType extends Type {
-    def isMatchedBy(tp: Type)(implicit ctx: Context): Boolean
+    def isMatchedBy(tp: Type, keepConstraint: Boolean = false)(implicit ctx: Context): Boolean
     def fold[T](x: T, ta: TypeAccumulator[T])(implicit ctx: Context): T
     def map(tm: TypeMap)(implicit ctx: Context): ProtoType
 
@@ -2200,6 +2215,8 @@ object Types {
     def underlyingRef: TermRef
   }
 
+  /** The singleton type for path prefix#myDesignator.
+    */
   abstract case class TermRef(override val prefix: Type,
                               private var myDesignator: Designator)
     extends NamedType with SingletonType with ImplicitRef {
@@ -3071,15 +3088,25 @@ object Types {
     def companion: MethodTypeCompanion
 
     final override def isJavaMethod: Boolean = companion eq JavaMethodType
-    final override def isImplicitMethod: Boolean = companion.eq(ImplicitMethodType) || companion.eq(ErasedImplicitMethodType)
-    final override def isErasedMethod: Boolean = companion.eq(ErasedMethodType) || companion.eq(ErasedImplicitMethodType)
+    final override def isImplicitMethod: Boolean =
+      companion.eq(ImplicitMethodType) ||
+      companion.eq(ErasedImplicitMethodType) ||
+      isContextual
+    final override def isErasedMethod: Boolean =
+      companion.eq(ErasedMethodType) ||
+      companion.eq(ErasedImplicitMethodType) ||
+      companion.eq(ErasedContextualMethodType)
+    final override def isContextual: Boolean =
+      companion.eq(ContextualMethodType) ||
+      companion.eq(ErasedContextualMethodType)
+    final override def isImplicit = isImplicitMethod
 
     def computeSignature(implicit ctx: Context): Signature = {
       val params = if (isErasedMethod) Nil else paramInfos
       resultSignature.prepend(params, isJavaMethod)
     }
 
-    protected def prefixString: String = "MethodType"
+    protected def prefixString: String = companion.prefixString
   }
 
   final class CachedMethodType(paramNames: List[TermName])(paramInfosExp: MethodType => List[Type], resultTypeExp: MethodType => Type, val companion: MethodTypeCompanion)
@@ -3128,7 +3155,7 @@ object Types {
     def syntheticParamName(n: Int): TypeName = tpnme.syntheticTypeParamName(n)
   }
 
-  abstract class MethodTypeCompanion extends TermLambdaCompanion[MethodType] { self =>
+  abstract class MethodTypeCompanion(val prefixString: String) extends TermLambdaCompanion[MethodType] { self =>
 
     /** Produce method type from parameter symbols, with special mappings for repeated
      *  and inline parameters:
@@ -3164,23 +3191,28 @@ object Types {
     }
   }
 
-  object MethodType extends MethodTypeCompanion {
-    def maker(isJava: Boolean = false, isImplicit: Boolean = false, isErased: Boolean = false): MethodTypeCompanion = {
+  object MethodType extends MethodTypeCompanion("MethodType") {
+    def maker(isJava: Boolean = false, isImplicit: Boolean = false, isErased: Boolean = false, isContextual: Boolean = false): MethodTypeCompanion = {
       if (isJava) {
         assert(!isImplicit)
         assert(!isErased)
+        assert(!isContextual)
         JavaMethodType
       }
-      else if (isImplicit && isErased) ErasedImplicitMethodType
-      else if (isImplicit) ImplicitMethodType
-      else if (isErased) ErasedMethodType
-      else MethodType
+      else if (isContextual)
+        if (isErased) ErasedContextualMethodType else ContextualMethodType
+      else if (isImplicit)
+        if (isErased) ErasedImplicitMethodType else ImplicitMethodType
+      else
+        if (isErased) ErasedMethodType else MethodType
     }
   }
-  object JavaMethodType extends MethodTypeCompanion
-  object ImplicitMethodType extends MethodTypeCompanion
-  object ErasedMethodType extends MethodTypeCompanion
-  object ErasedImplicitMethodType extends MethodTypeCompanion
+  object JavaMethodType extends MethodTypeCompanion("JavaMethodType")
+  object ErasedMethodType extends MethodTypeCompanion("ErasedMethodType")
+  object ContextualMethodType extends MethodTypeCompanion("ContextualMethodType")
+  object ErasedContextualMethodType extends MethodTypeCompanion("ErasedContextualMethodType")
+  object ImplicitMethodType extends MethodTypeCompanion("ImplicitMethodType")
+  object ErasedImplicitMethodType extends MethodTypeCompanion("ErasedImplicitMethodType")
 
   /** A ternary extractor for MethodType */
   object MethodTpe {
@@ -3258,6 +3290,9 @@ object Types {
     assert(paramNames.nonEmpty)
 
     def computeSignature(implicit ctx: Context): Signature = resultSignature
+
+    override def isContextual = resType.isContextual
+    override def isImplicit = resType.isImplicit
 
     /** Merge nested polytypes into one polytype. nested polytypes are normally not supported
      *  but can arise as temporary data structures.
@@ -3848,11 +3883,11 @@ object Types {
     def selfType(implicit ctx: Context): Type = {
       if (selfTypeCache == null)
         selfTypeCache = {
-          val given = cls.givenSelfType
-          if (!given.isValueType) appliedRef
-          else if (cls is Module) given
+          val givenSelf = cls.givenSelfType
+          if (!givenSelf.isValueType) appliedRef
+          else if (cls is Module) givenSelf
           else if (ctx.erasedTypes) appliedRef
-          else AndType(given, appliedRef)
+          else AndType(givenSelf, appliedRef)
         }
       selfTypeCache
     }

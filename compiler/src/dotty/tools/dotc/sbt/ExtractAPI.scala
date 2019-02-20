@@ -46,6 +46,9 @@ class ExtractAPI extends Phase {
     super.isRunnable && (ctx.sbtCallback != null || forceRun)
   }
 
+  // Check no needed. Does not transform trees
+  override def isCheckable: Boolean = false
+
   // SuperAccessors need to be part of the API (see the scripted test
   // `trait-super` for an example where this matters), this is only the case
   // after `PostTyper` (unlike `ExtractDependencies`, the simplication to trees
@@ -328,7 +331,7 @@ private class ExtractAPICollector(implicit val ctx: Context) extends ThunkHolder
     } else if (sym.is(Mutable, butNot = Accessor)) {
       api.Var.of(sym.name.toString, apiAccess(sym), apiModifiers(sym),
         apiAnnotations(sym).toArray, apiType(sym.info))
-    } else if (sym.isStable && !sym.isRealMethod) {
+    } else if (sym.isStableMember && !sym.isRealMethod) {
       api.Val.of(sym.name.toString, apiAccess(sym), apiModifiers(sym),
         apiAnnotations(sym).toArray, apiType(sym.info))
     } else {
@@ -586,7 +589,7 @@ private class ExtractAPICollector(implicit val ctx: Context) extends ThunkHolder
     val abs = sym.is(Abstract) || sym.is(Deferred) || absOver
     val over = sym.is(Override) || absOver
     new api.Modifiers(abs, over, sym.is(Final), sym.is(Sealed),
-      sym.is(Implicit), sym.is(Lazy), sym.is(Macro), sym.isSuperAccessor)
+      sym.is(ImplicitOrImplied), sym.is(Lazy), sym.is(Macro), sym.isSuperAccessor)
   }
 
   def apiAnnotations(s: Symbol): List[api.Annotation] = {

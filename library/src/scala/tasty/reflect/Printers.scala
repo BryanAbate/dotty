@@ -112,6 +112,7 @@ trait Printers
       if (flags.is(Flags.Override)) flagList += "Flags.Override"
       if (flags.is(Flags.Inline)) flagList += "Flags.Inline"
       if (flags.is(Flags.Macro)) flagList += "Flags.Macro"
+      if (flags.is(Flags.JavaDefined)) flagList += "Flags.JavaDefined"
       if (flags.is(Flags.Static)) flagList += "Flags.javaStatic"
       if (flags.is(Flags.Object)) flagList += "Flags.Object"
       if (flags.is(Flags.Trait)) flagList += "Flags.Trait"
@@ -125,9 +126,14 @@ trait Printers
       if (flags.is(Flags.Contravariant)) flagList += "Flags.Contravariant"
       if (flags.is(Flags.Scala2X)) flagList += "Flags.Scala2X"
       if (flags.is(Flags.DefaultParameterized)) flagList += "Flags.DefaultParameterized"
-      if (flags.is(Flags.Stable)) flagList += "Flags.Stable"
+      if (flags.is(Flags.StableRealizable)) flagList += "Flags.StableRealizable"
       if (flags.is(Flags.Param)) flagList += "Flags.Param"
       if (flags.is(Flags.ParamAccessor)) flagList += "Flags.ParamAccessor"
+      if (flags.is(Flags.Enum)) flagList += "Flags.Enum"
+      if (flags.is(Flags.ModuleClass)) flagList += "Flags.ModuleClass"
+      if (flags.is(Flags.PrivateLocal)) flagList += "Flags.PrivateLocal"
+      if (flags.is(Flags.Package)) flagList += "Flags.Package"
+      if (flags.is(Flags.ImplClass)) flagList += "Flags.ImplClass"
       flagList.result().mkString(" | ")
     }
 
@@ -194,8 +200,8 @@ trait Printers
           this += ", " += self += ", " ++= body += ")"
         case PackageDef(name, owner) =>
           this += "PackageDef(\"" += name += "\", " += owner += ")"
-        case Import(expr, selectors) =>
-          this += "Import(" += expr += ", " ++= selectors += ")"
+        case Import(impliedOnly, expr, selectors) =>
+          this += "Import(" += impliedOnly += ", " += expr += ", " ++= selectors += ")"
         case PackageClause(pid, stats) =>
           this += "PackageClause(" += pid += ", " ++= stats += ")"
       }
@@ -211,10 +217,6 @@ trait Printers
           this += "TypeTree.Projection(" += qualifier += ", \"" += name += "\")"
         case TypeTree.Singleton(ref) =>
           this += "TypeTree.Singleton(" += ref += ")"
-        case TypeTree.And(left, right) =>
-          this += "TypeTree.And(" += left += ", " += right += ")"
-        case TypeTree.Or(left, right) =>
-          this += "TypeTree.Or(" += left += ", " += right += ")"
         case TypeTree.Refined(tpt, refinements) =>
           this += "TypeTree.Refined(" += tpt += ", " ++= refinements += ")"
         case TypeTree.Applied(tpt, args) =>
@@ -486,6 +488,7 @@ trait Printers
       if (flags.is(Flags.Override)) flagList += "override"
       if (flags.is(Flags.Inline)) flagList += "inline"
       if (flags.is(Flags.Macro)) flagList += "macro"
+      if (flags.is(Flags.JavaDefined)) flagList += "javaDefined"
       if (flags.is(Flags.Static)) flagList += "javaStatic"
       if (flags.is(Flags.Object)) flagList += "object"
       if (flags.is(Flags.Trait)) flagList += "trait"
@@ -499,9 +502,14 @@ trait Printers
       if (flags.is(Flags.Contravariant)) flagList += "contravariant"
       if (flags.is(Flags.Scala2X)) flagList += "scala2x"
       if (flags.is(Flags.DefaultParameterized)) flagList += "defaultParameterized"
-      if (flags.is(Flags.Stable)) flagList += "stable"
+      if (flags.is(Flags.StableRealizable)) flagList += "stableRealizable"
       if (flags.is(Flags.Param)) flagList += "param"
       if (flags.is(Flags.ParamAccessor)) flagList += "paramAccessor"
+      if (flags.is(Flags.Enum)) flagList += "enum"
+      if (flags.is(Flags.ModuleClass)) flagList += "moduleClass"
+      if (flags.is(Flags.PrivateLocal)) flagList += "private[this]"
+      if (flags.is(Flags.Package)) flagList += "package"
+      if (flags.is(Flags.ImplClass)) flagList += "implClass"
       flagList.result().mkString("/*", " ", "*/")
     }
 
@@ -554,7 +562,7 @@ trait Printers
           val stats1 = stats.collect {
             case IsPackageClause(stat) => stat
             case IsDefinition(stat) if !(stat.symbol.flags.is(Flags.Object) && stat.symbol.flags.is(Flags.Lazy)) => stat
-            case stat @ Import(_, _) => stat
+            case stat @ Import(_, _, _) => stat
           }
           name match {
             case Term.Ident("<empty>") =>
@@ -565,8 +573,9 @@ trait Printers
               inBlock(printTrees(stats1, lineBreak()))
           }
 
-        case Import(expr, selectors) =>
+        case Import(impliedOnly, expr, selectors) =>
           this += "import "
+          if (impliedOnly) this += "implied "
           printTree(expr)
           this += "."
           printImportSelectors(selectors)
@@ -588,8 +597,9 @@ trait Printers
           else if (flags.is(Flags.Abstract)) this += highlightKeyword("abstract class ", color) += highlightTypeDef(name, color)
           else this += highlightKeyword("class ", color) += highlightTypeDef(name, color)
 
+          val typeParams = stats.collect { case IsTypeDef(targ) => targ  }.filter(_.symbol.isTypeParam).zip(targs)
           if (!flags.is(Flags.Object)) {
-            printTargsDefs(targs)
+            printTargsDefs(typeParams)
             val it = argss.iterator
             while (it.hasNext)
               printArgsDefs(it.next())
@@ -604,14 +614,19 @@ trait Printers
           if (parents1.nonEmpty)
             this += highlightKeyword(" extends ", color)
 
-          def printParent(parent: TermOrTypeTree): Unit = parent match {
+          def printParent(parent: TermOrTypeTree, needEmptyParens: Boolean = false): Unit = parent match {
             case IsTypeTree(parent) =>
               printTypeTree(parent)
             case IsTerm(Term.TypeApply(fun, targs)) =>
               printParent(fun)
+            case IsTerm(Term.Apply(fun@Term.Apply(_,_), args)) =>
+              printParent(fun, true)
+              if (!args.isEmpty || needEmptyParens)
+                inParens(printTrees(args, ", "))
             case IsTerm(Term.Apply(fun, args)) =>
               printParent(fun)
-              inParens(printTrees(args, ", "))
+              if (!args.isEmpty || needEmptyParens)
+                inParens(printTrees(args, ", "))
             case IsTerm(Term.Select(Term.New(tpt), _)) =>
               printTypeTree(tpt)
             case IsTerm(parent) =>
@@ -635,11 +650,11 @@ trait Printers
 
           def keepDefinition(d: Definition): Boolean = {
             val flags = d.symbol.flags
-            def isCaseClassUnOverridableMethod: Boolean = {
+            def isUndecompilableCaseClassMethod: Boolean = {
               // Currently the compiler does not allow overriding some of the methods generated for case classes
               d.symbol.flags.is(Flags.Synthetic) &&
               (d match {
-                case DefDef("apply" | "unapply", _, _, _, _) if d.symbol.owner.flags.is(Flags.Object) => true
+                case DefDef("apply" | "unapply" | "writeReplace", _, _, _, _) if d.symbol.owner.flags.is(Flags.Object) => true
                 case DefDef(n, _, _, _, _) if d.symbol.owner.flags.is(Flags.Case) =>
                   n == "copy" ||
                   n.matches("copy\\$default\\$[1-9][0-9]*") || // default parameters for the copy method
@@ -649,11 +664,11 @@ trait Printers
               })
             }
             def isInnerModuleObject = d.symbol.flags.is(Flags.Lazy) && d.symbol.flags.is(Flags.Object)
-            !flags.is(Flags.Param) && !flags.is(Flags.ParamAccessor) && !flags.is(Flags.FieldAccessor) && !isCaseClassUnOverridableMethod && !isInnerModuleObject
+            !flags.is(Flags.Param) && !flags.is(Flags.ParamAccessor) && !flags.is(Flags.FieldAccessor) && !isUndecompilableCaseClassMethod && !isInnerModuleObject
           }
           val stats1 = stats.collect {
             case IsDefinition(stat) if keepDefinition(stat) => stat
-            case stat @ Import(_, _) => stat
+            case stat @ Import(_, _, _) => stat
             case IsTerm(stat) => stat
           }
 
@@ -689,7 +704,7 @@ trait Printers
         case IsTypeDef(tdef @ TypeDef(name, rhs)) =>
           printDefAnnotations(tdef)
           this += highlightKeyword("type ", color)
-          printTargDef(tdef, isMember = true)
+          printTargDef((tdef, tdef), isMember = true)
 
         case IsValDef(vdef @ ValDef(name, tpt, rhs)) =>
           printDefAnnotations(vdef)
@@ -752,7 +767,7 @@ trait Printers
           printProtectedOrPrivate(ddef)
 
           this += highlightKeyword("def ", color) += highlightValDef((if (isConstructor) "this" else name), color)
-          printTargsDefs(targs)
+          printTargsDefs(targs.zip(targs))
           val it = argss.iterator
           while (it.hasNext)
             printArgsDefs(it.next())
@@ -1123,13 +1138,13 @@ trait Printers
         this
       }
 
-      def printTargsDefs(targs: List[TypeDef]): Unit = {
+      def printTargsDefs(targs: List[(TypeDef, TypeDef)], isDef:Boolean = true): Unit = {
         if (!targs.isEmpty) {
-          def printSeparated(list: List[TypeDef]): Unit = list match {
+          def printSeparated(list: List[(TypeDef, TypeDef)]): Unit = list match {
             case Nil =>
-            case x :: Nil => printTargDef(x)
+            case x :: Nil => printTargDef(x, isDef = isDef)
             case x :: xs =>
-              printTargDef(x)
+              printTargDef(x, isDef = isDef)
               this += ", "
               printSeparated(xs)
           }
@@ -1138,9 +1153,19 @@ trait Printers
         }
       }
 
-      def printTargDef(arg: TypeDef, isMember: Boolean = false): Buffer = {
-        this += arg.name
-        arg.rhs match {
+      def printTargDef(arg: (TypeDef, TypeDef), isMember: Boolean = false, isDef:Boolean = true): Buffer = {
+        val (argDef, argCons) = arg
+
+        if (isDef) {
+          if (argDef.symbol.flags.is(Flags.Covariant)) {
+            this += highlightValDef("+", color)
+          } else if (argDef.symbol.flags.is(Flags.Contravariant)) {
+            this += highlightValDef("-", color)
+          }
+        }
+
+        this += argCons.name
+        argCons.rhs match {
           case IsTypeBoundsTree(rhs) => printBoundsTree(rhs)
           case rhs @ WildcardTypeTree() =>
             printTypeOrBound(rhs.tpe)
@@ -1390,16 +1415,6 @@ trait Printers
               printAnnotation(annot)
           }
 
-        case TypeTree.And(left, right) =>
-          printTypeTree(left)
-          this += highlightTypeDef(" & ", color)
-          printTypeTree(right)
-
-        case TypeTree.Or(left, right) =>
-          printTypeTree(left)
-          this += highlightTypeDef(" | ", color)
-          printTypeTree(right)
-
         case TypeTree.MatchType(bound, selector, cases) =>
           printTypeTree(selector)
           this += highlightKeyword(" match ", color)
@@ -1410,7 +1425,7 @@ trait Printers
           printTypeTree(result)
 
         case TypeTree.LambdaTypeTree(tparams, body) =>
-          printTargsDefs(tparams)
+          printTargsDefs(tparams.zip(tparams), isDef = false)
           this += highlightTypeDef(" => ", color)
           printTypeOrBoundsTree(body)
 
@@ -1574,7 +1589,10 @@ trait Printers
         val Annotation(ref, args) = annot
         this += "@"
         printTypeTree(ref)
-        inParens(printTrees(args, ", "))
+        if (args.isEmpty)
+          this
+        else
+          inParens(printTrees(args, ", "))
       }
 
       def printDefAnnotations(definition: Definition): Buffer = {

@@ -259,7 +259,7 @@ class TreePickler(pickler: TastyPickler) {
     case tpe: PolyType if richTypes =>
       pickleMethodic(POLYtype, tpe)
     case tpe: MethodType if richTypes =>
-      pickleMethodic(methodType(isImplicit = tpe.isImplicitMethod, isErased = tpe.isErasedMethod), tpe)
+      pickleMethodic(methodType(tpe.isContextual, tpe.isImplicitMethod, tpe.isErasedMethod), tpe)
     case tpe: ParamRef =>
       assert(pickleParamRef(tpe), s"orphan parameter reference: $tpe")
     case tpe: LazyRef =>
@@ -532,9 +532,13 @@ class TreePickler(pickler: TastyPickler) {
             }
             pickleStats(tree.constr :: rest)
           }
-        case Import(expr, selectors) =>
+        case Import(impliedOnly, expr, selectors) =>
           writeByte(IMPORT)
-          withLength { pickleTree(expr); pickleSelectors(selectors) }
+          withLength {
+            if (impliedOnly) writeByte(IMPLIED)
+            pickleTree(expr)
+            pickleSelectors(selectors)
+          }
         case PackageDef(pid, stats) =>
           writeByte(PACKAGE)
           withLength { pickleType(pid.tpe); pickleStats(stats) }
@@ -555,12 +559,6 @@ class TreePickler(pickler: TastyPickler) {
         case AppliedTypeTree(tycon, args) =>
           writeByte(APPLIEDtpt)
           withLength { pickleTree(tycon); args.foreach(pickleTree) }
-        case AndTypeTree(tp1, tp2) =>
-          writeByte(ANDtpt)
-          withLength { pickleTree(tp1); pickleTree(tp2) }
-        case OrTypeTree(tp1, tp2) =>
-          writeByte(ORtpt)
-          withLength { pickleTree(tp1); pickleTree(tp2) }
         case MatchTypeTree(bound, selector, cases) =>
           writeByte(MATCHtpt)
           withLength {
@@ -646,6 +644,7 @@ class TreePickler(pickler: TastyPickler) {
     if (flags is Scala2x) writeByte(SCALA2X)
     if (isTerm) {
       if (flags is Implicit) writeByte(IMPLICIT)
+      if (flags is Implied) writeByte(IMPLIED)
       if (flags is Erased) writeByte(ERASED)
       if (flags.is(Lazy, butNot = Module)) writeByte(LAZY)
       if (flags is AbsOverride) { writeByte(ABSTRACT); writeByte(OVERRIDE) }
@@ -653,8 +652,9 @@ class TreePickler(pickler: TastyPickler) {
       if (flags is Accessor) writeByte(FIELDaccessor)
       if (flags is CaseAccessor) writeByte(CASEaccessor)
       if (flags is DefaultParameterized) writeByte(DEFAULTparameterized)
-      if (flags is Stable) writeByte(STABLE)
+      if (flags is StableRealizable) writeByte(STABLE)
       if (flags is Extension) writeByte(EXTENSION)
+      if (flags is Given) writeByte(GIVEN)
       if (flags is ParamAccessor) writeByte(PARAMsetter)
       assert(!(flags is Label))
     } else {

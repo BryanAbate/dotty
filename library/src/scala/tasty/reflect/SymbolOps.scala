@@ -14,6 +14,14 @@ trait SymbolOps extends Core {
     /** Flags of this symbol */
     def flags(implicit ctx: Context): Flags
 
+    def isLocalDummy(implicit ctx: Context): Boolean
+    def isRefinementClass(implicit ctx: Context): Boolean
+    def isAliasType(implicit ctx: Context): Boolean
+    def isAnonymousClass(implicit ctx: Context): Boolean
+    def isAnonymousFunction(implicit ctx: Context): Boolean
+    def isAbstractType(implicit ctx: Context): Boolean
+    def isClassConstructor(implicit ctx: Context): Boolean
+
     /** This symbol is private within the resulting type. */
     def privateWithin(implicit ctx: Context): Option[Type]
 
@@ -26,6 +34,7 @@ trait SymbolOps extends Core {
     /** The full name of this symbol up to the root package. */
     def fullName(implicit ctx: Context): String
 
+    /** The position of this symbol */
     def pos(implicit ctx: Context): Position
 
     def localContext(implicit ctx: Context): Context
@@ -51,6 +60,7 @@ trait SymbolOps extends Core {
     /** Annotations attached to this symbol */
     def annots(implicit ctx: Context): List[Term]
 
+    def isDefinedInCurrentRun(implicit ctx: Context): Boolean
   }
   implicit def SymbolDeco(symbol: Symbol): SymbolAPI
 
@@ -110,6 +120,7 @@ trait SymbolOps extends Core {
     /** The symbol of the companion module */
     def companionModule(implicit ctx: Context): Option[ValSymbol]
 
+    def moduleClass(implicit ctx: Context): Option[Symbol]
   }
   implicit def ClassSymbolDeco(symbol: ClassSymbol): ClassSymbolAPI
 
@@ -121,8 +132,10 @@ trait SymbolOps extends Core {
   }
 
   trait TypeSymbolAPI {
-    /** TypeDef tree of this defintion. */
+    /** TypeDef tree of this definition. */
     def tree(implicit ctx: Context): TypeDef
+
+    def isTypeParam(implicit ctx: Context): Boolean
   }
   implicit def TypeSymbolDeco(symbol: TypeSymbol): TypeSymbolAPI
 
@@ -136,6 +149,8 @@ trait SymbolOps extends Core {
   trait DefSymbolAPI {
     /** DefDef tree of this defintion. */
     def tree(implicit ctx: Context): DefDef
+
+    def signature(implicit ctx: Context): Signature
   }
   implicit def DefSymbolDeco(symbol: DefSymbol): DefSymbolAPI
 
@@ -151,8 +166,9 @@ trait SymbolOps extends Core {
     def tree(implicit ctx: Context): ValDef
 
     /** The class symbol of the companion module class */
-    def companionClass(implicit ctx: Context): Option[ClassSymbol]
+    def moduleClass(implicit ctx: Context): Option[ClassSymbol]
 
+    def companionClass(implicit ctx: Context): Option[ClassSymbol]
   }
   implicit def ValSymbolDeco(symbol: ValSymbol): ValSymbolAPI
 
@@ -164,7 +180,7 @@ trait SymbolOps extends Core {
   }
 
   trait BindSymbolAPI {
-    /** Bind pattern of this defintion. */
+    /** Bind pattern of this definition. */
     def tree(implicit ctx: Context): Bind
   }
   implicit def BindSymbolDeco(symbol: BindSymbol): BindSymbolAPI

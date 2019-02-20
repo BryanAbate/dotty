@@ -11,10 +11,9 @@ import java.io.{File => _}
 import scala.collection.generic.Clearable
 import scala.collection.mutable
 import scala.reflect.ClassTag
-import scala.reflect.internal.util.WeakHashSet
+import dotty.tools.dotc.util.WeakHashSet
 import dotty.tools.io.AbstractFile
 import scala.tools.asm.AnnotationVisitor
-import scala.tools.nsc.backend.jvm.{BCodeHelpers, BackendInterface}
 import dotty.tools.dotc.core._
 import Contexts._
 import Types._
@@ -706,6 +705,7 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
     def isJavaEntryPoint: Boolean = CollectEntryPoints.isJavaEntryPoint(sym)
 
     def isClassConstructor: Boolean = toDenot(sym).isClassConstructor
+    def isSerializable: Boolean = toDenot(sym).isSerializable
 
     /**
      * True for module classes of modules that are top-level or owned only by objects. Module classes
@@ -855,6 +855,9 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
 
     def samMethod(): Symbol =
       toDenot(sym).info.abstractTermMembers.headOption.getOrElse(toDenot(sym).info.member(nme.apply)).symbol
+
+    def isFunctionClass: Boolean =
+      defn.isFunctionClass(sym)
   }
 
 
@@ -1175,8 +1178,8 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
         val arity = field.meth.tpe.widenDealias.paramTypes.size - _1.size
         val returnsUnit = field.meth.tpe.widenDealias.resultType.classSymbol == UnitClass
         if (returnsUnit)
-          ctx.requiredClass(("scala.compat.java8.JProcedure" + arity))
-        else ctx.requiredClass(("scala.compat.java8.JFunction" + arity))
+          ctx.requiredClass(("dotty.runtime.function.JProcedure" + arity))
+        else ctx.requiredClass(("dotty.runtime.function.JFunction" + arity))
       }
     }
   }

@@ -30,7 +30,7 @@ class ErrorMessagesTests extends ErrorMessagesTest {
         implicit val ctx: Context = ictx
         assertMessageCount(1, messages)
         val errorMsg = messages.head
-        val CaseClassCannotExtendEnum(cls, parent) :: Nil = messages
+        val ClassCannotExtendEnum(cls, parent) :: Nil = messages
         assertEquals("Bar", cls.name.show)
         assertEquals("Foo", parent.name.show)
         assertEquals("<empty>", cls.owner.name.show)
@@ -705,20 +705,6 @@ class ErrorMessagesTests extends ErrorMessagesTest {
       assertEquals("final", flags.toString)
     }
 
-  @Test def topLevelCantBeImplicit =
-    checkMessagesAfter(FrontEnd.name) {
-      """package Foo {
-        |  implicit object S
-        |}
-        |""".stripMargin
-    }
-    .expect { (ictx, messages) =>
-      implicit val ctx: Context = ictx
-      assertMessageCount(1, messages)
-      val TopLevelCantBeImplicit(symbol) :: Nil = messages
-      assertEquals("object S", symbol.show)
-    }
-
   @Test def typesAndTraitsCantBeImplicit =
     checkMessagesAfter(FrontEnd.name) {
       """class Foo {
@@ -729,8 +715,7 @@ class ErrorMessagesTests extends ErrorMessagesTest {
     .expect { (ictx, messages) =>
       implicit val ctx: Context = ictx
       assertMessageCount(1, messages)
-      val TypesAndTraitsCantBeImplicit(symbol) :: Nil = messages
-      assertEquals("trait S", symbol.show)
+      val TypesAndTraitsCantBeImplicit() :: Nil = messages
     }
 
   @Test def onlyClassesCanBeAbstract =
@@ -966,7 +951,7 @@ class ErrorMessagesTests extends ErrorMessagesTest {
       implicit val ctx: Context = ictx
       assertMessageCount(1, messages)
       val err :: Nil = messages
-      assertEquals(err, ExpectedClassOrObjectDef())
+      assertEquals(err, ExpectedToplevelDef())
     }
 
   @Test def implicitClassPrimaryConstructorArity =
@@ -1379,6 +1364,46 @@ class ErrorMessagesTests extends ErrorMessagesTest {
         assertEquals("Boo", qual.show)
         assertEquals("(class Int, class String)", argTypes.map(_.typeSymbol).mkString("(", ", ", ")"))
       }
+
+  @Test def unapplyInvalidReturnType =
+    checkMessagesAfter("frontend") {
+      """
+        |class A(val i: Int)
+        |
+        |object A {
+        |  def unapply(a: A): Int = a.i
+        |  def test(a: A) = a match {
+        |    case A() => 1
+        |  }
+        |}
+      """.stripMargin
+    }.expect { (ictx, messages) =>
+      implicit val ctx: Context = ictx
+      assertMessageCount(1, messages)
+      val UnapplyInvalidReturnType(unapplyResult, unapplyName) :: Nil = messages
+      assertEquals("Int", unapplyResult.show)
+      assertEquals("unapply", unapplyName.show)
+    }
+
+  @Test def unapplySeqInvalidReturnType =
+    checkMessagesAfter("frontend") {
+      """
+        |class A(val i: Int)
+        |
+        |object A {
+        |  def unapplySeq(a: A): Int = a.i
+        |  def test(a: A) = a match {
+        |    case A() => 1
+        |  }
+        |}
+      """.stripMargin
+    }.expect { (ictx, messages) =>
+      implicit val ctx: Context = ictx
+      assertMessageCount(1, messages)
+      val UnapplyInvalidReturnType(unapplyResult, unapplyName) :: Nil = messages
+      assertEquals("Int", unapplyResult.show)
+      assertEquals("unapplySeq", unapplyName.show)
+    }
 
   @Test def staticOnlyAllowedInsideObjects =
     checkMessagesAfter(CheckStatic.name) {
