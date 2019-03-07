@@ -98,7 +98,7 @@ object Implicits {
             else if (mt.paramInfos.lengthCompare(1) == 0 && {
                   var formal = widenSingleton(mt.paramInfos.head)
                   if (approx) formal = wildApprox(formal)
-                  ctx.test(implicit ctx => argType relaxed_<:< formal)
+                  ctx.test(implicit ctx => argType relaxed_<:< formal.widenExpr)
                 })
               Candidate.Conversion
             else
@@ -669,7 +669,7 @@ trait Implicits { self: Typer =>
             case t @ TypeRef(NoPrefix, _) =>
               inferImplicit(defn.QuotedTypeType.appliedTo(t), EmptyTree, span) match {
                 case SearchSuccess(tag, _, _) if tag.tpe.isStable =>
-                  tag.tpe.select(defn.QuotedType_~)
+                  tag.tpe.select(defn.QuotedType_splice)
                 case _ =>
                   ok = false
                   t
@@ -1039,7 +1039,7 @@ trait Implicits { self: Typer =>
       val locked = ctx.typerState.ownedVars
       val adapted =
         if (argument.isEmpty)
-          adapt(generated, pt, locked)
+          adapt(generated, pt.widenExpr, locked)
         else {
           val untpdGenerated = untpd.TypedSplice(generated)
           def tryConversion(implicit ctx: Context) =

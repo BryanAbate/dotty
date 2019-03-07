@@ -31,6 +31,7 @@ object ProtoTypes {
      *    2. `pt` is by name parameter type, and `tp` is compatible with its underlying type
      *    3. there is an implicit conversion from `tp` to `pt`.
      *    4. `tp` is a numeric subtype of `pt` (this case applies even if implicit conversions are disabled)
+     *  If `pt` is a by-name type, we compare against the underlying type instead.
      */
     def isCompatible(tp: Type, pt: Type)(implicit ctx: Context): Boolean =
       (tp.widenExpr relaxed_<:< pt.widenExpr) || viewExists(tp, pt)
@@ -605,7 +606,8 @@ object ProtoTypes {
     case tp @ AppliedType(tycon, args) =>
       wildApprox(tycon, theMap, seen) match {
         case _: WildcardType => WildcardType // this ensures we get a * type
-        case tycon1 => tp.derivedAppliedType(tycon1, args.mapConserve(wildApprox(_, theMap, seen)))
+        case tycon1 => tp.derivedAppliedType(tycon1,
+          args.mapConserve(arg => wildApprox(arg, theMap, seen)))
       }
     case tp: RefinedType => // default case, inlined for speed
       tp.derivedRefinedType(

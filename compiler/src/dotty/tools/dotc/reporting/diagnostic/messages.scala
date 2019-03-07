@@ -282,8 +282,8 @@ object messages {
     val explanation: String = {
       hl"""|The identifier for `$treeKind$name` is not bound, that is,
            |no declaration for this identifier can be found.
-           |That can happen for instance if $name or its declaration has either been
-           |misspelt, or if you're forgetting an import"""
+           |That can happen, for example, if `$name` or its declaration has either been
+           |misspelt or if an import is missing."""
     }
   }
 
@@ -2137,18 +2137,38 @@ object messages {
     val explanation: String = ""
   }
 
-  case class DoubleDeclaration(decl: Symbol, previousDecl: Symbol)(implicit ctx: Context) extends Message(DoubleDeclarationID) {
+  case class DoubleDefinition(decl: Symbol, previousDecl: Symbol, base: Symbol)(implicit ctx: Context) extends Message(DoubleDefinitionID) {
     val kind: String = "Duplicate Symbol"
     val msg: String = {
       val details = if (decl.isRealMethod && previousDecl.isRealMethod) {
         // compare the signatures when both symbols represent methods
         decl.signature.matchDegree(previousDecl.signature) match {
-          /* case Signature.NoMatch => // can't happen because decl.matches(previousDecl) is checked before reporting this error */
-          case Signature.ParamMatch => "\nOverloads with matching parameter types are not allowed."
-          case _ /* Signature.FullMatch */ => "\nThe definitions have matching type signatures after erasure."
+          case Signature.NoMatch =>
+            "" // shouldn't be reachable
+          case Signature.ParamMatch =>
+            "have matching parameter types."
+          case Signature.FullMatch =>
+            "have the same type after erasure."
         }
       } else ""
-      hl"${decl.showLocated} is already defined as ${previousDecl.showDcl} ${if (previousDecl.span.exists) s"at line ${previousDecl.sourcePos.line + 1}" else ""}." + details
+      def symLocation(sym: Symbol) = {
+        val lineDesc =
+          if (sym.span.exists && sym.span != sym.owner.span)
+            s" at line ${sym.sourcePos.line + 1}" else ""
+        i"in ${sym.owner}${lineDesc}"
+      }
+      val clashDescription =
+        if (decl.owner eq previousDecl.owner)
+          "Double definition"
+        else if ((decl.owner eq base) || (previousDecl eq base))
+          "Name clash between defined and inherited member"
+        else
+          "Name clash between inherited members"
+
+      em"""$clashDescription:
+          |${previousDecl.showDcl} ${symLocation(previousDecl)} and
+          |${decl.showDcl} ${symLocation(decl)}
+          |""" + details
     }
     val explanation: String = ""
   }
@@ -2264,5 +2284,61 @@ object messages {
     override def msg: String =
       hl"""Stable identifier required, but ${tree.show} found"""
     override def explanation: String = ""
+  }
+
+  case class IllegalSuperAccessor(base: Symbol, memberName: Name,
+      acc: Symbol, accTp: Type,
+      other: Symbol, otherTp: Type)(implicit val ctx: Context) extends Message(IllegalSuperAccessorID) {
+    val kind: String = "Reference"
+    val msg: String = {
+      // The mixin containing a super-call that requires a super-accessor
+      val accMixin = acc.owner
+      // The class or trait that the super-accessor should resolve too in `base`
+      val otherMixin = other.owner
+      // The super-call in `accMixin`
+      val superCall = i"super.$memberName"
+      // The super-call that the super-accesors in `base` forwards to
+      val resolvedSuperCall = i"super[${otherMixin.name}].$memberName"
+      // The super-call that we would have called if `super` in traits behaved like it
+      // does in classes, i.e. followed the linearization of the trait itself.
+      val staticSuperCall = {
+        val staticSuper = accMixin.asClass.info.parents.reverse
+          .find(_.nonPrivateMember(memberName).matchingDenotation(accMixin.thisType, acc.info).exists)
+        val staticSuperName = staticSuper match {
+          case Some(parent) =>
+            parent.classSymbol.name.show
+          case None => // Might be reachable under separate compilation
+            "SomeParent"
+        }
+        i"super[$staticSuperName].$memberName"
+      }
+      hl"""$base cannot be defined due to a conflict between its parents when
+          |implementing a super-accessor for $memberName in $accMixin:
+          |
+          |1. One of its parent (${accMixin.name}) contains a call $superCall in its body,
+          |   and when a super-call in a trait is written without an explicit parent
+          |   listed in brackets, it is implemented by a generated super-accessor in
+          |   the class that extends this trait based on the linearization order of
+          |   the class.
+          |2. Because ${otherMixin.name} comes before ${accMixin.name} in the linearization
+          |   order of ${base.name}, and because ${otherMixin.name} overrides $memberName,
+          |   the super-accessor in ${base.name} is implemented as a call to
+          |   $resolvedSuperCall.
+          |3. However,
+          |   ${otherTp.widenExpr} (the type of $resolvedSuperCall in ${base.name})
+          |   is not a subtype of
+          |   ${accTp.widenExpr} (the type of $memberName in $accMixin).
+          |   Hence, the super-accessor that needs to be generated in ${base.name}
+          |   is illegal.
+          |
+          |Here are two possible ways to resolve this:
+          |
+          |1. Change the linearization order of ${base.name} such that
+          |   ${accMixin.name} comes before ${otherMixin.name}.
+          |2. Alternatively, replace $superCall in the body of $accMixin by a
+          |   super-call to a specific parent, e.g. $staticSuperCall
+          |""".stripMargin
+    }
+    val explanation: String = ""
   }
 }

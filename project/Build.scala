@@ -859,7 +859,7 @@ object Build {
     settings(commonSettings).
     settings(
       EclipseKeys.skipProject := true,
-      version := "0.1.14-snapshot", // Keep in sync with package.json
+      version := "0.1.15-snapshot", // Keep in sync with package.json
       autoScalaLibrary := false,
       publishArtifact := false,
       includeFilter in unmanagedSources := NothingFilter | "*.ts" | "**.json",
@@ -913,6 +913,8 @@ object Build {
 
   val prepareCommunityBuild = taskKey[Unit]("Publish local the compiler and the sbt plugin. Also store the versions of the published local artefacts in two files, community-build/{dotty-bootstrapped.version,sbt-dotty-sbt}.")
 
+  val updateCommunityBuild = taskKey[Unit]("Updates the community build.")
+
   lazy val `community-build` = project.in(file("community-build")).
     settings(commonNonBootstrappedSettings).
     settings(
@@ -930,6 +932,12 @@ object Build {
         IO.write(baseDirectory.value / "sbt-dotty-sbt", pluginText)
         IO.write(baseDirectory.value / "dotty-bootstrapped.version", dottyVersion)
       },
+      updateCommunityBuild := testOnly.in(Test).toTask(
+        " dotty.communitybuild.CommunityBuildUpdate -- --include-categories=dotty.communitybuild.UpdateCategory").value,
+      testOptions in Test += Tests.Argument(
+        TestFrameworks.JUnit,
+        "--include-categories=dotty.communitybuild.TestCategory",
+      ),
       (Test / testOnly) := ((Test / testOnly) dependsOn prepareCommunityBuild).evaluated,
       (Test / test    ) := ((Test / test    ) dependsOn prepareCommunityBuild).value
     )

@@ -1,6 +1,6 @@
 ---
 layout: doc-page
-title: Relationship with Scala 2 Implicits"
+title: Relationship with Scala 2 Implicits
 ---
 
 Many, but not all, of the new contextual abstraction features in Scala 3 can be mapped to Scala 2's implicits. This page gives a rundown on the relationships between new and old features.
@@ -75,7 +75,11 @@ Explicit arguments to inferable parameters _must_ be written using `given`,
 mirroring the definition syntax. E.g, `max(2, 3) given IntOrd`.
 Scala 2 uses normal applications `max(2, 3)(IntOrd)` instead. The Scala 2 syntax has some inherent ambiguities and restrictions which are overcome by the new syntax. For instance, multiple implicit parameter lists are not available in the old syntax, even though they can be simulated using auxiliary objects in the "Aux" pattern.
 
-The `infer` method corresponds to `implicitly` in Scala 2.
+The `the` method corresponds to `implicitly` in Scala 2.
+It is precisely the same as the `the` method in Shapeless.
+The difference between `the` (in both versions) and `implicitly` is
+that `the` can return a more precise type than the type that was
+asked for.
 
 ### Context Bounds
 
@@ -103,9 +107,9 @@ Extension methods in implicit instances have no direct counterpart in Scala-2. T
 
 Typeclass derivation has no direct counterpart in the Scala 2 language. Comparable functionality can be achieved by macro-based libraries such as Shapeless, Magnolia, or scalaz-deriving.
 
-### Implicit Function Types
+### Context Query types
 
-Implicit function types have no analogue in Scala 2.
+Context Query types have no analogue in Scala 2.
 
 ### Implicit By-Name Parameters
 

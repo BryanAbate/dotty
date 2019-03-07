@@ -29,8 +29,8 @@ import scala.reflect.ClassTag
 object Splicer {
   import tpd._
 
-  /** Splice the Tree for a Quoted expression. `~'(xyz)` becomes `xyz`
-   *  and for `~xyz` the tree of `xyz` is interpreted for which the
+  /** Splice the Tree for a Quoted expression. `${'{xyz}}` becomes `xyz`
+   *  and for `$xyz` the tree of `xyz` is interpreted for which the
    *  resulting expression is returned as a `Tree`
    *
    *  See: `Staging`
@@ -59,8 +59,8 @@ object Splicer {
       }
   }
 
-  /** Check that the Tree can be spliced. `~'(xyz)` becomes `xyz`
-    *  and for `~xyz` the tree of `xyz` is interpreted for which the
+  /** Check that the Tree can be spliced. `${'{xyz}}` becomes `xyz`
+    *  and for `$xyz` the tree of `xyz` is interpreted for which the
     *  resulting expression is returned as a `Tree`
     *
     *  See: `Staging`
@@ -106,11 +106,7 @@ object Splicer {
     protected def interpretVarargs(args: List[Object])(implicit env: Env): Object =
       args.toSeq
 
-    protected def interpretTastyContext()(implicit env: Env): Object = {
-      new ReflectionImpl(ctx) {
-        override def rootPosition: SourcePosition = pos
-      }
-    }
+    protected def interpretTastyContext()(implicit env: Env): Object = ReflectionImpl(ctx, pos)
 
     protected def interpretStaticMethodCall(moduleClass: Symbol, fn: Symbol, args: => List[Object])(implicit env: Env): Object = {
       val (inst, clazz) =

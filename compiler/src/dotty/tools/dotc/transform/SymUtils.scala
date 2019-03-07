@@ -150,8 +150,9 @@ class SymUtils(val self: Symbol) extends AnyVal {
 
   /** Is symbol directly or indirectly owned by a term symbol? */
   @tailrec final def isLocal(implicit ctx: Context): Boolean = {
-    val owner = self.owner
-    if (owner.isTerm) true
+    val owner = self.maybeOwner
+    if (!owner.exists) false
+    else if (owner.isTerm) true
     else if (owner.is(Package)) false
     else owner.isLocal
   }
@@ -162,5 +163,5 @@ class SymUtils(val self: Symbol) extends AnyVal {
 
   /** Is symbol a splice operation? */
   def isSplice(implicit ctx: Context): Boolean =
-    self == defn.QuotedExpr_~ || self == defn.QuotedType_~
+    self == defn.QuotedExpr_splice || self == defn.QuotedType_splice
 }

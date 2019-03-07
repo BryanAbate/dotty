@@ -79,6 +79,7 @@ object Typer {
    *  search was tried on a tree. This will in some cases be reported in error messages
    */
   private[typer] val HiddenSearchFailure = new Property.Key[SearchFailure]
+
 }
 
 class Typer extends Namer
@@ -733,7 +734,7 @@ class Typer extends Namer
       fullyDefinedType(tree.tpe, "block", tree.span)
       var avoidingType = avoid(tree.tpe, localSyms)
       val ptDefined = isFullyDefined(pt, ForceDegree.none)
-      if (ptDefined && !(avoidingType <:< pt)) avoidingType = pt
+      if (ptDefined && !(avoidingType.widenExpr <:< pt)) avoidingType = pt
       val tree1 = ascribeType(tree, avoidingType)
       assert(ptDefined || noLeaks(tree1) || tree1.tpe.isErroneous,
           // `ptDefined` needed because of special case of anonymous classes
@@ -953,7 +954,7 @@ class Typer extends Namer
       (defn.isProductSubType(formal) || formal.derivesFrom(defn.PairClass)) &&
       productSelectorTypes(formal, tree.sourcePos).corresponds(params) {
         (argType, param) =>
-          param.tpt.isEmpty || argType <:< typedAheadType(param.tpt).tpe
+          param.tpt.isEmpty || argType.widenExpr <:< typedAheadType(param.tpt).tpe
       }
     }
 
@@ -1481,7 +1482,7 @@ class Typer extends Namer
     val tpt1 = checkSimpleKinded(typedType(tpt))
     val rhs1 = vdef.rhs match {
       case rhs @ Ident(nme.WILDCARD) => rhs withType tpt1.tpe
-      case rhs => typedExpr(rhs, tpt1.tpe)
+      case rhs => typedExpr(rhs, tpt1.tpe.widenExpr)
     }
     val vdef1 = assignType(cpy.ValDef(vdef)(name, tpt1, rhs1), sym)
     if (sym.is(Inline, butNot = DeferredOrTermParamOrAccessor))
@@ -1548,7 +1549,7 @@ class Typer extends Namer
       }
     }
     if (sym.isInlineMethod) rhsCtx = rhsCtx.addMode(Mode.InlineableBody)
-    val rhs1 = typedExpr(ddef.rhs, tpt1.tpe)(rhsCtx)
+    val rhs1 = typedExpr(ddef.rhs, tpt1.tpe.widenExpr)(rhsCtx)
 
     if (sym.isInlineMethod) PrepareInlineable.registerInlineInfo(sym, ddef.rhs, _ => rhs1)
 
@@ -1917,7 +1918,7 @@ class Typer extends Namer
           val elemTpes = (elems, pts).zipped.map((elem, pt) =>
             ctx.typeComparer.widenInferred(elem.tpe, pt))
           val resTpe = (elemTpes :\ (defn.UnitType: Type))(defn.PairType.appliedTo(_, _))
-          app1.asInstance(resTpe)
+          app1.cast(resTpe)
         }
       }
     }
@@ -2200,7 +2201,6 @@ class Typer extends Namer
    *  with `fallBack` otherwise. `fallBack` is supposed to always give an error.
    */
   def tryInsertApplyOrImplicit(tree: Tree, pt: ProtoType, locked: TypeVars)(fallBack: => Tree)(implicit ctx: Context): Tree = {
-
     def isMethod(tree: Tree) = tree.tpe match {
       case ref: TermRef => ref.denot.alternatives.forall(_.info.widen.isInstanceOf[MethodicType])
       case _ => false
@@ -2208,7 +2208,6 @@ class Typer extends Namer
 
     def isSyntheticApply(tree: Tree): Boolean = tree match {
       case tree: Select => tree.getAttachment(InsertedApply).isDefined
-      case Apply(fn, _) => fn.getAttachment(InsertedApply).isDefined
       case _ => false
     }
 
@@ -2311,7 +2310,7 @@ class Typer extends Namer
   }
 
   private def adapt1(tree: Tree, pt: Type, locked: TypeVars)(implicit ctx: Context): Tree = {
-    assert(pt.exists)
+    assert(pt.exists && !pt.isInstanceOf[ExprType])
     def methodStr = err.refStr(methPart(tree).tpe)
 
     def readapt(tree: Tree)(implicit ctx: Context) = adapt(tree, pt, locked)
@@ -2611,7 +2610,7 @@ class Typer extends Namer
           // I suspect, but am not 100% sure that this might affect inferred types,
           // if the expected type is a supertype of the GADT bound. It would be good to come
           // up with a test case for this.
-          tree.select(defn.Any_typeCast).appliedToType(pt)
+          tree.cast(pt)
         else
           tree
       }
@@ -2697,10 +2696,47 @@ class Typer extends Namer
       case tree: Closure => cpy.Closure(tree)(tpt = TypeTree(pt)).withType(pt)
     }
 
+    /** Replace every top-level occurrence of a wildcard type argument by
+     *  a fresh skolem type. The skolem types are of the form $i.CAP, where
+     *  $i is a skolem of type `scala.internal.TypeBox`, and `CAP` is its
+     *  type member. See the documentation of `TypeBox` for a rationale why we do this.
+     */
+    def captureWildcards(tp: Type)(implicit ctx: Context): Type = tp match {
+      case tp: AndOrType => tp.derivedAndOrType(captureWildcards(tp.tp1), captureWildcards(tp.tp2))
+      case tp: RefinedType => tp.derivedRefinedType(captureWildcards(tp.parent), tp.refinedName, tp.refinedInfo)
+      case tp: RecType => tp.derivedRecType(captureWildcards(tp.parent))
+      case tp: LazyRef => captureWildcards(tp.ref)
+      case tp: AnnotatedType => tp.derivedAnnotatedType(captureWildcards(tp.parent), tp.annot)
+      case tp @ AppliedType(tycon, args) if tp.hasWildcardArg =>
+        tycon.typeParams match {
+          case tparams @ ((_: Symbol) :: _) =>
+            val boundss = tparams.map(_.paramInfo.substApprox(tparams.asInstanceOf[List[TypeSymbol]], args))
+            val args1 = args.zipWithConserve(boundss) { (arg, bounds) =>
+              arg match {
+                case TypeBounds(lo, hi) =>
+                  val skolem = SkolemType(defn.TypeBoxType.appliedTo(lo | bounds.loBound, hi & bounds.hiBound))
+                  TypeRef(skolem, defn.TypeBox_CAP)
+                case arg => arg
+              }
+            }
+            tp.derivedAppliedType(tycon, args1)
+          case _ =>
+            tp
+        }
+      case _ => tp
+    }
+
     def adaptToSubType(wtp: Type): Tree = {
       // try converting a constant to the target type
       val folded = ConstFold(tree, pt)
-      if (folded ne tree) return adaptConstant(folded, folded.tpe.asInstanceOf[ConstantType])
+      if (folded ne tree)
+        return adaptConstant(folded, folded.tpe.asInstanceOf[ConstantType])
+
+      // Try to capture wildcards in type
+      val captured = captureWildcards(wtp)
+      if (captured `ne` wtp)
+        return readapt(tree.cast(captured))
+
       // drop type if prototype is Unit
       if (pt isRef defn.UnitClass) {
         // local adaptation makes sure every adapted tree conforms to its pt
@@ -2709,6 +2745,7 @@ class Typer extends Namer
         checkStatementPurity(tree1)(tree, ctx.owner)
         return tpd.Block(tree1 :: Nil, Literal(Constant(())))
       }
+
       // convert function literal to SAM closure
       tree match {
         case closure(Nil, id @ Ident(nme.ANON_FUN), _)
@@ -2725,6 +2762,7 @@ class Typer extends Namer
           }
         case _ =>
       }
+
       // try an extension method in scope
       pt match {
         case SelectionProto(name, mbrType, _, _) =>
@@ -2749,6 +2787,7 @@ class Typer extends Namer
           }
         case _ =>
       }
+
       // try an implicit conversion
       val prevConstraint = ctx.typerState.constraint
       def recover(failure: SearchFailureType) =
@@ -2865,11 +2904,11 @@ class Typer extends Namer
     methType.isImplicit && pt.isContextual // for a transition allow `with` arguments for regular implicit parameters
 
   /** Check that `tree == x: pt` is typeable. Used when checking a pattern
-    * against a selector of type `pt`. This implementation accounts for
-    * user-defined definitions of `==`.
-    *
-    * Overwritten to no-op in ReTyper.
-    */
+   *  against a selector of type `pt`. This implementation accounts for
+   *  user-defined definitions of `==`.
+   *
+   *  Overwritten to no-op in ReTyper.
+   */
   protected def checkEqualityEvidence(tree: tpd.Tree, pt: Type)(implicit ctx: Context) : Unit = {
     tree match {
       case _: RefTree | _: Literal
