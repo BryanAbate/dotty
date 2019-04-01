@@ -364,18 +364,21 @@ object Implicits {
 
   abstract class SearchFailureType extends ErrorType {
     def expectedType: Type
-    protected def argument: Tree
+    def argument: Tree
 
     /** A "massaging" function for displayed types to give better info in error diagnostics */
     def clarify(tp: Type)(implicit ctx: Context): Type = tp
 
-    final protected def qualify(implicit ctx: Context): String =
-      if (expectedType.exists)
-        if (argument.isEmpty) em"match type ${clarify(expectedType)}"
-        else em"convert from ${argument.tpe} to ${clarify(expectedType)}"
-      else
+    final protected def qualify(implicit ctx: Context): String = expectedType match {
+      case SelectionProto(name, mproto, _, _) if !argument.isEmpty =>
+        em"provide an extension method `$name` on ${argument.tpe}"
+      case NoType =>
         if (argument.isEmpty) em"match expected type"
         else em"convert from ${argument.tpe} to expected type"
+      case _ =>
+        if (argument.isEmpty) em"match type ${clarify(expectedType)}"
+        else em"convert from ${argument.tpe} to ${clarify(expectedType)}"
+    }
 
     /** An explanation of the cause of the failure as a string */
     def explanation(implicit ctx: Context): String
@@ -425,9 +428,12 @@ object Implicits {
   class AmbiguousImplicits(val alt1: SearchSuccess, val alt2: SearchSuccess, val expectedType: Type, val argument: Tree) extends SearchFailureType {
     def explanation(implicit ctx: Context): String =
       em"both ${err.refStr(alt1.ref)} and ${err.refStr(alt2.ref)} $qualify"
-    override def whyNoConversion(implicit ctx: Context): String =
-      "\nNote that implicit conversions cannot be applied because they are ambiguous;" +
-      "\n" + explanation
+    override def whyNoConversion(implicit ctx: Context): String = {
+      val what = if (expectedType.isInstanceOf[SelectionProto]) "extension methods" else "conversions"
+      i"""
+         |Note that implicit $what cannot be applied because they are ambiguous;
+         |$explanation"""
+    }
   }
 
   class MismatchedImplicit(ref: TermRef,
@@ -678,10 +684,10 @@ trait Implicits { self: Typer =>
           }
         }
         val tag = bindFreeVars(arg)
-        if (bindFreeVars.ok) ref(defn.QuotedType_apply).appliedToType(tag)
+        if (bindFreeVars.ok) ref(defn.InternalQuoted_typeQuote).appliedToType(tag)
         else EmptyTree
       case arg :: Nil if ctx.inInlineMethod =>
-        ref(defn.QuotedType_apply).appliedToType(arg)
+        ref(defn.InternalQuoted_typeQuote).appliedToType(arg)
       case _ =>
         EmptyTree
     }
@@ -822,6 +828,7 @@ trait Implicits { self: Typer =>
   }
 
   def missingArgMsg(arg: Tree, pt: Type, where: String)(implicit ctx: Context): String = {
+
     def msg(shortForm: String)(headline: String = shortForm) = arg match {
       case arg: Trees.SearchFailureIdent[_] =>
         shortForm
@@ -836,6 +843,7 @@ trait Implicits { self: Typer =>
               |But ${tpe.explanation}."""
         }
     }
+
     def location(preposition: String) = if (where.isEmpty) "" else s" $preposition $where"
 
     /** Extract a user defined error message from a symbol `sym`
@@ -898,7 +906,30 @@ trait Implicits { self: Typer =>
             raw,
             pt.typeSymbol.typeParams.map(_.name.unexpandedName.toString),
             pt.argInfos))
-        msg(userDefined.getOrElse(em"no implicit argument of type $pt was found${location("for")}"))()
+
+        def hiddenImplicitsAddendum: String = arg.tpe match {
+          case fail: SearchFailureType =>
+
+            def hiddenImplicitNote(s: SearchSuccess) =
+              em"\n\nNote: implied instance ${s.ref.symbol.showLocated} was not considered because it was not imported with an `import implied`."
+
+            def FindHiddenImplicitsCtx(ctx: Context): Context =
+              if (ctx == NoContext) ctx
+              else ctx.freshOver(FindHiddenImplicitsCtx(ctx.outer)).addMode(Mode.FindHiddenImplicits)
+
+            inferImplicit(fail.expectedType, fail.argument, arg.span)(
+              FindHiddenImplicitsCtx(ctx)) match {
+              case s: SearchSuccess => hiddenImplicitNote(s)
+              case f: SearchFailure =>
+                f.reason match {
+                  case ambi: AmbiguousImplicits => hiddenImplicitNote(ambi.alt1)
+                  case r => ""
+                }
+            }
+        }
+        msg(userDefined.getOrElse(
+          em"no implicit argument of type $pt was found${location("for")}"))() ++
+        hiddenImplicitsAddendum
     }
   }
 
@@ -1070,7 +1101,7 @@ trait Implicits { self: Typer =>
       }
       else {
         val returned =
-          if (cand.isExtension) Applications.ExtMethodApply(adapted).withType(adapted.tpe)
+          if (cand.isExtension) new Applications.ExtMethodApply(adapted).withType(adapted.tpe)
           else adapted
         SearchSuccess(returned, ref, cand.level)(ctx.typerState, ctx.gadt)
       }
@@ -1376,7 +1407,7 @@ abstract class SearchHistory { outer =>
             val wideTp = tp.widenExpr
             lazy val wildTp = wildApprox(wideTp)
             if (belowByname && (wildTp <:< wildPt)) false
-            else if ((wideTp.typeSize < ptSize && wideTp.coveringSet == ptCoveringSet) || (wildTp == wildPt)) true
+            else if ((wideTp.typeSize < ptSize && wideTp.coveringSet == ptCoveringSet) || (wildTp =:= wildPt)) true
             else loop(tl, isByname(tp) || belowByname)
           }
           else loop(tl, isByname(tp) || belowByname)
@@ -1581,7 +1612,7 @@ final class SearchRoot extends SearchHistory {
             // Substitute dictionary references into dictionary entry RHSs
             val rhsMap = new TreeTypeMap(treeMap = {
               case id: Ident if vsymMap.contains(id.symbol) =>
-                tpd.ref(vsymMap(id.symbol))
+                tpd.ref(vsymMap(id.symbol)).withSpan(id.span)
               case tree => tree
             })
             val nrhss = rhss.map(rhsMap(_))

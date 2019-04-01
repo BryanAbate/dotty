@@ -45,7 +45,8 @@ object Inferencing {
 
   /** Instantiate selected type variables `tvars` in type `tp` */
   def instantiateSelected(tp: Type, tvars: List[Type])(implicit ctx: Context): Unit =
-    new IsFullyDefinedAccumulator(new ForceDegree.Value(tvars.contains, minimizeAll = true)).process(tp)
+    if (tvars.nonEmpty)
+      new IsFullyDefinedAccumulator(new ForceDegree.Value(tvars.contains, minimizeAll = true)).process(tp)
 
   /** Instantiate any type variables in `tp` whose bounds contain a reference to
    *  one of the parameters in `tparams` or `vparamss`.
@@ -149,6 +150,9 @@ object Inferencing {
     case _ =>
       tree
   }
+
+  def isSkolemFree(tp: Type)(implicit ctx: Context): Boolean =
+    !tp.existsPart(_.isInstanceOf[SkolemType])
 
   /** Derive information about a pattern type by comparing it with some variant of the
    *  static scrutinee type. We have the following situation in case of a (dynamic) pattern match:

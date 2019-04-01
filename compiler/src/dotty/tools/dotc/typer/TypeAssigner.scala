@@ -199,7 +199,7 @@ trait TypeAssigner {
           val d2 = pre.nonPrivateMember(name)
           if (reallyExists(d2) && firstTry)
             test(NamedType(pre, name, d2), false)
-          else if (pre.derivesFrom(defn.DynamicClass)) {
+          else if (pre.derivesFrom(defn.DynamicClass) && name.isTermName) {
             TryDynamicCallType
           } else {
             val alts = tpe.denot.alternatives.map(_.symbol).filter(_.exists)
@@ -238,7 +238,7 @@ trait TypeAssigner {
     val mbr = qualType.member(name)
     if (reallyExists(mbr))
       qualType.select(name, mbr)
-    else if (qualType.derivesFrom(defn.DynamicClass) && !Dynamic.isDynamicMethod(name))
+    else if (qualType.derivesFrom(defn.DynamicClass) && name.isTermName && !Dynamic.isDynamicMethod(name))
       TryDynamicCallType
     else if (qualType.isErroneous || name.toTermName == nme.ERROR)
       UnspecifiedErrorType
@@ -301,8 +301,16 @@ trait TypeAssigner {
     ConstFold(tree.withType(tp))
   }
 
+  /** Normalize type T appearing in a new T by following eta expansions to
+   *  avoid higher-kinded types.
+   */
+  def typeOfNew(tpt: Tree)(implicit ctx: Context): Type = tpt.tpe.dealias match {
+    case TypeApplications.EtaExpansion(tycon) => tycon
+    case t => tpt.tpe
+  }
+
   def assignType(tree: untpd.New, tpt: Tree)(implicit ctx: Context): New =
-    tree.withType(tpt.tpe)
+    tree.withType(typeOfNew(tpt))
 
   def assignType(tree: untpd.Literal)(implicit ctx: Context): Literal =
     tree.withType {
@@ -487,7 +495,7 @@ trait TypeAssigner {
         }
         HKTypeLambda.fromParams(
           params(new mutable.ListBuffer[TypeSymbol](), pat).toList,
-          defn.FunctionOf(pat.tpe :: Nil, body.tpe))
+          defn.MatchCase(pat.tpe, body.tpe))
       }
       else body.tpe
     tree.withType(ownType)

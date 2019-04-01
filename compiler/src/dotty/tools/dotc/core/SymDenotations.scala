@@ -484,13 +484,13 @@ object SymDenotations {
 
     /** Is this symbol an anonymous class? */
     final def isAnonymousClass(implicit ctx: Context): Boolean =
-      isClass && (initial.name startsWith str.ANON_CLASS)
+      isClass && initial.name.isAnonymousClassName
 
     final def isAnonymousFunction(implicit ctx: Context): Boolean =
-      this.symbol.is(Method) && (initial.name startsWith str.ANON_FUN)
+      this.symbol.is(Method) && initial.name.isAnonymousFunctionName
 
     final def isAnonymousModuleVal(implicit ctx: Context): Boolean =
-      this.symbol.is(ModuleVal) && (initial.name startsWith str.ANON_CLASS)
+      this.symbol.is(ModuleVal) && initial.name.isAnonymousClassName
 
     /** Is this a synthetic method that represents conversions between representations of a value class
       *  These methods are generated in ExtensionMethods
@@ -650,9 +650,6 @@ object SymDenotations {
     /** is this the constructor of a class? */
     final def isClassConstructor: Boolean = name == nme.CONSTRUCTOR
 
-    /** Is this the constructor of a trait? */
-    final def isImplClassConstructor: Boolean = name == nme.TRAIT_CONSTRUCTOR
-
     /** Is this the constructor of a trait or a class */
     final def isConstructor: Boolean = name.isConstructorName
 
@@ -757,7 +754,6 @@ object SymDenotations {
         || boundary.isRoot
         || (accessWithin(boundary) || accessWithinLinked(boundary)) &&
              (  !(this is Local)
-             || (owner is ImplClass) // allow private local accesses to impl class members
              || isCorrectThisType(pre)
              )
         || (this is Protected) &&
@@ -1143,6 +1139,15 @@ object SymDenotations {
     final def allOverriddenSymbols(implicit ctx: Context): Iterator[Symbol] =
       if (!canMatchInheritedSymbols) Iterator.empty
       else overriddenFromType(owner.info)
+
+    /** Equivalent to `allOverriddenSymbols.headOption.getOrElse(NoSymbol)` but more efficient. */
+    final def nextOverriddenSymbol(implicit ctx: Context): Symbol = {
+      val overridden = allOverriddenSymbols
+      if (overridden.hasNext)
+        overridden.next
+      else
+        NoSymbol
+    }
 
     /** Returns all matching symbols defined in parents of the selftype. */
     final def extendedOverriddenSymbols(implicit ctx: Context): Iterator[Symbol] =
@@ -1553,7 +1558,7 @@ object SymDenotations {
         case p :: parents1 =>
           p.classSymbol match {
             case pcls: ClassSymbol => builder.addAll(pcls.baseClasses)
-            case _ => assert(isRefinementClass || ctx.mode.is(Mode.Interactive), s"$this has non-class parent: $p")
+            case _ => assert(isRefinementClass || p.isError || ctx.mode.is(Mode.Interactive), s"$this has non-class parent: $p")
           }
           traverse(parents1)
         case nil =>
@@ -1574,6 +1579,17 @@ object SymDenotations {
         base.isClass && (
           (symbol eq defn.NothingClass) ||
             (symbol eq defn.NullClass) && (base ne defn.NothingClass))
+
+    /** Is it possible that a class inherits both `this` and `that`?
+     *
+     *  @note The test is based on single-class inheritance and the closed
+     *        hierarchy of final classes.
+     *
+     *  @return The result may contain false positives, but never false negatives.
+     */
+    final def mayHaveCommonChild(that: ClassSymbol)(implicit ctx: Context): Boolean =
+      !this.is(Final) && !that.is(Final) && (this.is(Trait) || that.is(Trait)) ||
+        this.derivesFrom(that) || that.derivesFrom(this.symbol)
 
     final override def typeParamCreationFlags: FlagSet = ClassTypeParamCreationFlags
 
@@ -1901,8 +1917,7 @@ object SymDenotations {
     override def primaryConstructor(implicit ctx: Context): Symbol = {
       def constrNamed(cname: TermName) = info.decls.denotsNamed(cname).last.symbol
         // denotsNamed returns Symbols in reverse order of occurrence
-      if (this.is(ImplClass)) constrNamed(nme.TRAIT_CONSTRUCTOR) // ignore normal constructor
-      else if (this.is(Package)) NoSymbol
+      if (this.is(Package)) NoSymbol
       else constrNamed(nme.CONSTRUCTOR).orElse(constrNamed(nme.TRAIT_CONSTRUCTOR))
     }
 

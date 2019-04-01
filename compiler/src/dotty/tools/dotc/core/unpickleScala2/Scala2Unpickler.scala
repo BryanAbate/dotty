@@ -467,6 +467,14 @@ class Scala2Unpickler(bytes: Array[Byte], classRoot: ClassDenotation, moduleClas
     def completeRoot(denot: ClassDenotation, completer: LazyType): Symbol = {
       denot.setFlag(flags)
       denot.resetFlag(Touched) // allow one more completion
+
+      // Temporary measure, as long as we do not read these classes from Tasty.
+      // Scala-2 classes don't have NoInits set even if they are pure. We override this
+      // for Product and Serializable so that case classes can be pure. A full solution
+      // requires that we read all Scala code from Tasty.
+      if (owner == defn.ScalaPackageClass && ((name eq tpnme.Serializable) || (name eq tpnme.Product)))
+        denot.setFlag(NoInits)
+
       denot.info = completer
       denot.symbol
     }
@@ -474,8 +482,6 @@ class Scala2Unpickler(bytes: Array[Byte], classRoot: ClassDenotation, moduleClas
     def finishSym(sym: Symbol): Symbol = {
       if (sym.isClass) {
         sym.setFlag(Scala2x)
-        if (flags.is(Trait) && ctx.mode.is(Mode.Java8Unpickling))
-          sym.setFlag(Scala_2_12_Trait)
       }
       if (!(isRefinementClass(sym) || isUnpickleRoot(sym) || (sym is Scala2Existential))) {
         val owner = sym.owner
@@ -1051,7 +1057,7 @@ class Scala2Unpickler(bytes: Array[Byte], classRoot: ClassDenotation, moduleClas
           val to = untpd.Ident(toName)
           if (toName.isEmpty) from else untpd.Thicket(from, untpd.Ident(toName))
         })
-        Import(impliedOnly = false, expr, selectors)
+        Import(importImplied = false, expr, selectors)
 
       case TEMPLATEtree =>
         setSym()

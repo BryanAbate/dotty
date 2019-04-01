@@ -851,6 +851,9 @@ object Types {
       ctx.typeComparer.isSameType(this, that)
     }
 
+    final def frozen_=:=(that: Type)(implicit ctx: Context): Boolean =
+      ctx.typeComparer.isSameTypeWhenFrozen(this, that)
+
     /** Is this type a primitive value type which can be widened to the primitive value type `that`? */
     def isValueSubType(that: Type)(implicit ctx: Context): Boolean = widen match {
       case self: TypeRef if self.symbol.isPrimitiveValueClass =>
@@ -2415,7 +2418,7 @@ object Types {
     }
   }
 
-  /** A constant type with  single `value`. */
+  /** A constant type with single `value`. */
   abstract case class ConstantType(value: Constant) extends CachedProxyType with SingletonType {
     override def underlying(implicit ctx: Context): Type = value.tpe
 
@@ -2435,7 +2438,14 @@ object Types {
     private[this] var myRef: Type = null
     private[this] var computed = false
     def ref(implicit ctx: Context): Type = {
-      if (computed) assert(myRef != null)
+      if (computed) {
+        if (myRef == null) {
+          // if errors were reported previously handle this by throwing a CyclicReference
+          // instead of crashing immediately. A test case is neg/i6057.scala.
+          assert(ctx.reporter.errorsReported)
+          CyclicReference(NoDenotation)
+        }
+      }
       else {
         computed = true
         myRef = refFn(ctx)
@@ -3657,7 +3667,14 @@ object Types {
    *  `owningTree` and `owner` are used to determine whether a type-variable can be instantiated
    *  at some given point. See `Inferencing#interpolateUndetVars`.
    */
-  final class TypeVar(val origin: TypeParamRef, creatorState: TyperState) extends CachedProxyType with ValueType {
+  final class TypeVar(private var _origin: TypeParamRef, creatorState: TyperState) extends CachedProxyType with ValueType {
+
+    def origin: TypeParamRef = _origin
+
+    /** Set origin to new parameter. Called if we merge two conflicting constraints.
+     *  See OrderingConstraint#merge, OrderingConstraint#rename
+     */
+    def setOrigin(p: TypeParamRef) = _origin = p
 
     /** The permanent instance type of the variable, or NoType is none is given yet */
     private[this] var myInst: Type = NoType
@@ -3753,7 +3770,7 @@ object Types {
 
     def caseType(tp: Type)(implicit ctx: Context): Type = tp match {
       case tp: HKTypeLambda => caseType(tp.resType)
-      case defn.FunctionOf(_, restpe, _, _) => restpe
+      case defn.MatchCase(_, body) => body
     }
 
     def alternatives(implicit ctx: Context): List[Type] = cases.map(caseType)
@@ -3764,42 +3781,9 @@ object Types {
 
     override def tryNormalize(implicit ctx: Context): Type = reduced.normalized
 
-    /** Switch to choose parallel or sequential reduction */
-    private final val reduceInParallel = false
-
-    final def cantPossiblyMatch(cas: Type)(implicit ctx: Context): Boolean =
-      true  // should be refined if we allow overlapping cases
-
     def reduced(implicit ctx: Context): Type = {
       val trackingCtx = ctx.fresh.setTypeComparerFn(new TrackingTypeComparer(_))
-      val cmp = trackingCtx.typeComparer.asInstanceOf[TrackingTypeComparer]
-
-      def reduceSequential(cases: List[Type])(implicit ctx: Context): Type = cases match {
-        case Nil => NoType
-        case cas :: cases1 =>
-          val r = cmp.matchCase(scrutinee, cas, instantiate = true)
-          if (r.exists) r
-          else if (cantPossiblyMatch(cas)) reduceSequential(cases1)
-          else NoType
-      }
-
-      def reduceParallel(implicit ctx: Context) = {
-        val applicableBranches = cases
-          .map(cmp.matchCase(scrutinee, _, instantiate = true)(trackingCtx))
-          .filter(_.exists)
-        applicableBranches match {
-          case Nil => NoType
-          case applicableBranch :: Nil => applicableBranch
-          case _ =>
-            record(i"MatchType.multi-branch")
-            ctx.typeComparer.glb(applicableBranches)
-        }
-      }
-
-      def isBounded(tp: Type) = tp match {
-        case tp: TypeParamRef =>
-        case tp: TypeRef => ctx.gadt.contains(tp.symbol)
-      }
+      val typeComparer = trackingCtx.typeComparer.asInstanceOf[TrackingTypeComparer]
 
       def contextInfo(tp: Type): Type = tp match {
         case tp: TypeParamRef =>
@@ -3813,28 +3797,27 @@ object Types {
           tp.underlying
       }
 
-      def updateReductionContext() = {
+      def updateReductionContext(): Unit = {
         reductionContext = new mutable.HashMap
-        for (tp <- cmp.footprint)
+        for (tp <- typeComparer.footprint)
           reductionContext(tp) = contextInfo(tp)
-        typr.println(i"footprint for $this $hashCode: ${cmp.footprint.toList.map(x => (x, contextInfo(x)))}%, %")
+        typr.println(i"footprint for $this $hashCode: ${typeComparer.footprint.toList.map(x => (x, contextInfo(x)))}%, %")
       }
 
-      def upToDate =
+      def isUpToDate: Boolean =
         reductionContext.keysIterator.forall { tp =>
           reductionContext(tp) `eq` contextInfo(tp)
         }
 
       record("MatchType.reduce called")
-      if (!Config.cacheMatchReduced || myReduced == null || !upToDate) {
+      if (!Config.cacheMatchReduced || myReduced == null || !isUpToDate) {
         record("MatchType.reduce computed")
         if (myReduced != null) record("MatchType.reduce cache miss")
         myReduced =
           trace(i"reduce match type $this $hashCode", typr, show = true) {
             try
               if (defn.isBottomType(scrutinee)) defn.NothingType
-              else if (reduceInParallel) reduceParallel(trackingCtx)
-              else reduceSequential(cases)(trackingCtx)
+              else typeComparer.matchCases(scrutinee, cases)(trackingCtx)
             catch {
               case ex: Throwable =>
                 handleRecursive("reduce type ", i"$scrutinee match ...", ex)
@@ -4448,10 +4431,12 @@ object Types {
 
         case tp: LambdaType =>
           def mapOverLambda = {
-            variance = -variance
+            val restpe = tp.resultType
+            val saved = variance
+            variance = if (defn.MatchCase.isInstance(restpe)) 0 else -variance
             val ptypes1 = tp.paramInfos.mapConserve(this).asInstanceOf[List[tp.PInfo]]
-            variance = -variance
-            derivedLambdaType(tp)(ptypes1, this(tp.resultType))
+            variance = saved
+            derivedLambdaType(tp)(ptypes1, this(restpe))
           }
           mapOverLambda
 
@@ -4471,7 +4456,9 @@ object Types {
           derivedOrType(tp, this(tp.tp1), this(tp.tp2))
 
         case tp: MatchType =>
-          derivedMatchType(tp, this(tp.bound), this(tp.scrutinee), tp.cases.mapConserve(this))
+          val bound1 = this(tp.bound)
+          val scrut1 = atVariance(0)(this(tp.scrutinee))
+          derivedMatchType(tp, bound1, scrut1, tp.cases.mapConserve(this))
 
         case tp: SkolemType =>
           derivedSkolemType(tp, this(tp.info))
@@ -4818,10 +4805,7 @@ object Types {
 
       case tp @ AppliedType(tycon, args) =>
         @tailrec def foldArgs(x: T, tparams: List[ParamInfo], args: List[Type]): T =
-          if (args.isEmpty) {
-            assert(tparams.isEmpty)
-            x
-          }
+          if (args.isEmpty || tparams.isEmpty) x
           else {
             val tparam = tparams.head
             val acc = args.head match {
@@ -4835,10 +4819,12 @@ object Types {
       case _: BoundType | _: ThisType => x
 
       case tp: LambdaType =>
-        variance = -variance
+        val restpe = tp.resultType
+        val saved = variance
+        variance = if (defn.MatchCase.isInstance(restpe)) 0 else -variance
         val y = foldOver(x, tp.paramInfos)
-        variance = -variance
-        this(y, tp.resultType)
+        variance = saved
+        this(y, restpe)
 
       case tp: TermRef =>
         if (stopAtStatic && tp.currentSymbol.isStatic || (tp.prefix `eq` NoPrefix)) x
@@ -4866,7 +4852,9 @@ object Types {
         this(this(x, tp.tp1), tp.tp2)
 
       case tp: MatchType =>
-        foldOver(this(this(x, tp.bound), tp.scrutinee), tp.cases)
+        val x1 = this(x, tp.bound)
+        val x2 = atVariance(0)(this(x1, tp.scrutinee))
+        foldOver(x2, tp.cases)
 
       case AnnotatedType(underlying, annot) =>
         this(applyToAnnot(x, annot), underlying)

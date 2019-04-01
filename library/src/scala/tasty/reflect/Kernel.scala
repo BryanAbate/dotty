@@ -7,54 +7,54 @@ package scala.tasty.reflect
  *  +- Tree -+- PackageClause
  *           +- Import
  *           +- Statement -+- Definition --+- PackageDef
- *                         |               +- ClassDef
- *                         |               +- TypeDef
- *                         |               +- DefDef
- *                         |               +- ValDef
- *                         |
- *                         +- Term --------+- Ref -+- Ident
- *                                         |       +- Select
- *                                         |
- *                                         +- Literal
- *                                         +- This
- *                                         +- New
- *                                         +- NamedArg
- *                                         +- Apply
- *                                         +- TypeApply
- *                                         +- Super
- *                                         +- Typed
- *                                         +- Assign
- *                                         +- Block
- *                                         +- Lambda
- *                                         +- If
- *                                         +- Match
- *                                         +- Try
- *                                         +- Return
- *                                         +- Repeated
- *                                         +- Inlined
- *                                         +- SelectOuter
- *                                         +- While
- *
- *
- *                         +- TypeTree ----+- TypeTree_Inferred
- *                         |               +- TypeTree_Ident
- *                         |               +- TypeTree_Select
- *                         |               +- TypeTree_Project
- *                         |               +- TypeTree_Singleton
- *  +- TypeOrBoundsTree ---+               +- TypeTree_Refined
- *                         |               +- TypeTree_Applied
- *                         |               +- TypeTree_Annotated
- *                         |               +- TypeTree_MatchType
- *                         |               +- TypeTree_ByName
- *                         |               +- TypeTree_LambdaTypeTree
- *                         |               +- TypeTree_TypeBind
- *                         |               +- TypeTree_TypeBlock
- *                         |
- *                         +- TypeBoundsTree
- *                         +- WildcardTypeTree
- *
- *  +- CaseDef
- *  +- TypeCaseDef
+ *           |             |               +- ClassDef
+ *           |             |               +- TypeDef
+ *           |             |               +- DefDef
+ *           |             |               +- ValDef
+ *           |             |
+ *           |             +- Term --------+- Ref -+- Ident
+ *           |                             |       +- Select
+ *           |                             |
+ *           |                             +- Literal
+ *           |                             +- This
+ *           |                             +- New
+ *           |                             +- NamedArg
+ *           |                             +- Apply
+ *           |                             +- TypeApply
+ *           |                             +- Super
+ *           |                             +- Typed
+ *           |                             +- Assign
+ *           |                             +- Block
+ *           |                             +- Lambda
+ *           |                             +- If
+ *           |                             +- Match
+ *           |                             +- ImplicitMatch
+ *           |                             +- Try
+ *           |                             +- Return
+ *           |                             +- Repeated
+ *           |                             +- Inlined
+ *           |                             +- SelectOuter
+ *           |                             +- While
+ *           |
+ *           |
+ *           +- TypeTree ----+- Inferred
+ *           |               +- TypeIdent
+ *           |               +- TypeSelect
+ *           |               +- Project
+ *           |               +- Singleton
+ *           |               +- Refined
+ *           |               +- Applied
+ *           |               +- Annotated
+ *           |               +- MatchTypeTree
+ *           |               +- ByName
+ *           |               +- LambdaTypeTree
+ *           |               +- TypeBind
+ *           |               +- TypeBlock
+ *           |
+ *           +- TypeBoundsTree
+ *           +- WildcardTypeTree
+ *           +- CaseDef
+ *           +- TypeCaseDef
  *
  *  +- Pattern --+- Value
  *               +- Bind
@@ -100,18 +100,19 @@ package scala.tasty.reflect
  *
  *  +- Constant
  *
- *  +- Symbol --+- PackageSymbol
- *              +- ClassSymbol
- *              +- TypeSymbol
- *              +- DefSymbol
- *              +- ValSymbol
- *              +- BindSymbol
+ *  +- Symbol --+- PackageDefSymbol
+ *              |
+ *              +- TypeSymbol -+- ClassDefSymbol
+ *              |              +- TypeDefSymbol
+ *              |              +- TypeBindSymbol
+ *              |
+ *              +- TermSymbol -+- DefDefSymbol
+ *              |              +- ValDefSymbol
+ *              |              +- BindSymbol
+ *              |
  *              +- NoSymbol
  *
  *  +- Flags
- *
- *  Aliases:
- *   # TermOrTypeTree = Term | TypeTree
  *
  *  ```
  */
@@ -139,6 +140,22 @@ trait Kernel {
   def Context_source(self: Context): java.nio.file.Path
 
   //
+  // REPORTING
+  //
+
+  /** Report a compilation error with the given message at the given position */
+  def error(msg: => String, pos: Position)(implicit ctx: Context): Unit
+
+  /** Report a compilation error with the given message at the given position range */
+  def error(msg: => String, source: SourceFile, start: Int, end: Int)(implicit ctx: Context): Unit
+
+  /** Report a compilation warning with the given message at the given position */
+  def warning(msg: => String, pos: Position)(implicit ctx: Context): Unit
+
+  /** Report a compilation warning with the given message at the given position range */
+  def warning(msg: => String, source: SourceFile, start: Int, end: Int)(implicit ctx: Context): Unit
+
+  //
   // Settings
   //
 
@@ -148,12 +165,19 @@ trait Kernel {
   def Settings_color(self: Settings): Boolean
 
   //
+  // MISC
+  //
+  /** Whether the code type checks in the given context?
+   *
+   *  @param code The code to be type checked
+   *
+   *  The code should be a sequence of expressions or statements that may appear in a block.
+   */
+  def typeChecks(code: String)(implicit ctx: Context): Boolean
+
+  //
   // TREES
   //
-
-  // TODO: When bootstrapped, remove and use `Term | TypeTree` type directly in other files
-  /** Workaround missing `|` types in Scala 2 to represent `Term | TypeTree` */
-  type TermOrTypeTree /* Term | TypeTree */ <: AnyRef
 
   /** Tree representing code written in the source */
   type Tree <: AnyRef
@@ -183,13 +207,13 @@ trait Kernel {
 
   def matchImport(tree: Tree)(implicit ctx: Context): Option[Import]
 
-  def Import_impliedOnly(self: Import): Boolean
+  def Import_implied(self: Import): Boolean
   def Import_expr(self: Import)(implicit ctx: Context): Term
   def Import_selectors(self: Import)(implicit ctx: Context): List[ImportSelector]
 
-  def Import_apply(impliedOnly: Boolean, expr: Term, selectors: List[ImportSelector])(implicit ctx: Context): Import
+  def Import_apply(importImplied: Boolean, expr: Term, selectors: List[ImportSelector])(implicit ctx: Context): Import
 
-  def Import_copy(original: Import)(impliedOnly: Boolean, expr: Term, selectors: List[ImportSelector])(implicit ctx: Context): Import
+  def Import_copy(original: Import)(importImplied: Boolean, expr: Term, selectors: List[ImportSelector])(implicit ctx: Context): Import
 
   /** Tree representing a definition in the source code. It can be `PackageDef`, `ClassDef`, `TypeDef`, `DefDef` or `ValDef` */
   type Definition <: Statement
@@ -205,7 +229,7 @@ trait Kernel {
 
   def PackageDef_owner(self: PackageDef)(implicit ctx: Context): PackageDef
   def PackageDef_members(self: PackageDef)(implicit ctx: Context): List[Statement]
-  def PackageDef_symbol(self: PackageDef)(implicit ctx: Context): PackageSymbol
+  def PackageDef_symbol(self: PackageDef)(implicit ctx: Context): PackageDefSymbol
 
   /** Tree representing a class definition. This includes annonymus class definitions and the class of a module object */
   type ClassDef <: Definition
@@ -213,24 +237,24 @@ trait Kernel {
   def matchClassDef(tree: Tree)(implicit ctx: Context): Option[ClassDef]
 
   def ClassDef_constructor(self: ClassDef)(implicit ctx: Context): DefDef
-  def ClassDef_parents(self: ClassDef)(implicit ctx: Context): List[TermOrTypeTree]
+  def ClassDef_parents(self: ClassDef)(implicit ctx: Context): List[Tree/* Term | TypeTree */]
   def ClassDef_derived(self: ClassDef)(implicit ctx: Context): List[TypeTree]
   def ClassDef_self(self: ClassDef)(implicit ctx: Context): Option[ValDef]
   def ClassDef_body(self: ClassDef)(implicit ctx: Context): List[Statement]
-  def ClassDef_symbol(self: ClassDef)(implicit ctx: Context): ClassSymbol
+  def ClassDef_symbol(self: ClassDef)(implicit ctx: Context): ClassDefSymbol
 
-  def ClassDef_copy(original: ClassDef)(name: String, constr: DefDef, parents: List[TermOrTypeTree], derived: List[TypeTree], selfOpt: Option[ValDef], body: List[Statement])(implicit ctx: Context): ClassDef
+  def ClassDef_copy(original: ClassDef)(name: String, constr: DefDef, parents: List[Tree/* Term | TypeTree */], derived: List[TypeTree], selfOpt: Option[ValDef], body: List[Statement])(implicit ctx: Context): ClassDef
 
   /** Tree representing a type (paramter or member) definition in the source code */
   type TypeDef <: Definition
 
   def matchTypeDef(tree: Tree)(implicit ctx: Context): Option[TypeDef]
 
-  def TypeDef_rhs(self: TypeDef)(implicit ctx: Context): TypeOrBoundsTree
-  def TypeDef_symbol(self: TypeDef)(implicit ctx: Context): TypeSymbol
+  def TypeDef_rhs(self: TypeDef)(implicit ctx: Context): Tree /*TypeTree | TypeBoundsTree*/
+  def TypeDef_symbol(self: TypeDef)(implicit ctx: Context): TypeDefSymbol
 
-  def TypeDef_apply(symbol: TypeSymbol)(implicit ctx: Context): TypeDef
-  def TypeDef_copy(original: TypeDef)(name: String, rhs: TypeOrBoundsTree)(implicit ctx: Context): TypeDef
+  def TypeDef_apply(symbol: TypeDefSymbol)(implicit ctx: Context): TypeDef
+  def TypeDef_copy(original: TypeDef)(name: String, rhs: Tree /*TypeTree | TypeBoundsTree*/)(implicit ctx: Context): TypeDef
 
   /** Tree representing a method definition in the source code */
   type DefDef <: Definition
@@ -241,29 +265,27 @@ trait Kernel {
   def DefDef_paramss(self: DefDef)(implicit ctx: Context): List[List[ValDef]]
   def DefDef_returnTpt(self: DefDef)(implicit ctx: Context): TypeTree
   def DefDef_rhs(self: DefDef)(implicit ctx: Context): Option[Term]
-  def DefDef_symbol(self: DefDef)(implicit ctx: Context): DefSymbol
+  def DefDef_symbol(self: DefDef)(implicit ctx: Context): DefDefSymbol
 
-  def DefDef_apply(symbol: DefSymbol, rhsFn: List[Type] => List[List[Term]] => Option[Term])(implicit ctx: Context): DefDef
+  def DefDef_apply(symbol: DefDefSymbol, rhsFn: List[Type] => List[List[Term]] => Option[Term])(implicit ctx: Context): DefDef
   def DefDef_copy(original: DefDef)(name: String, typeParams: List[TypeDef], paramss: List[List[ValDef]], tpt: TypeTree, rhs: Option[Term])(implicit ctx: Context): DefDef
 
-  /** Tree representing a value definition in the source code This inclues `val`, `lazy val`, `var`, `object` and parameter defintions. */
+  /** Tree representing a value definition in the source code This inclues `val`, `lazy val`, `var`, `object` and parameter definitions. */
   type ValDef <: Definition
 
   def matchValDef(tree: Tree)(implicit ctx: Context): Option[ValDef]
 
   def ValDef_tpt(self: ValDef)(implicit ctx: Context): TypeTree
   def ValDef_rhs(self: ValDef)(implicit ctx: Context): Option[Term]
-  def ValDef_symbol(self: ValDef)(implicit ctx: Context): ValSymbol
+  def ValDef_symbol(self: ValDef)(implicit ctx: Context): ValDefSymbol
 
-  def ValDef_apply(symbol: ValSymbol, rhs: Option[Term])(implicit ctx: Context): ValDef
+  def ValDef_apply(symbol: ValDefSymbol, rhs: Option[Term])(implicit ctx: Context): ValDef
   def ValDef_copy(original: ValDef)(name: String, tpt: TypeTree, rhs: Option[Term])(implicit ctx: Context): ValDef
 
   /** Tree representing an expression in the source code */
   type Term <: Statement
 
   def matchTerm(tree: Tree)(implicit ctx: Context): Option[Term]
-
-  def matchTermNotTypeTree(termOrTypeTree: TermOrTypeTree)(implicit ctx: Context): Option[Term]
 
   def Term_pos(self: Term)(implicit ctx: Context): Position
   def Term_tpe(self: Term)(implicit ctx: Context): Type
@@ -316,7 +338,7 @@ trait Kernel {
 
   def This_id(self: This)(implicit ctx: Context): Option[Id]
 
-  def This_apply(cls: ClassSymbol)(implicit ctx: Context): This
+  def This_apply(cls: ClassDefSymbol)(implicit ctx: Context): This
   def This_copy(original: Tree)(qual: Option[Id])(implicit ctx: Context): This
 
   /** Tree representing `new` in the source code */
@@ -440,6 +462,16 @@ trait Kernel {
   def Match_apply(selector: Term, cases: List[CaseDef])(implicit ctx: Context): Match
   def Match_copy(original: Tree)(selector: Term, cases: List[CaseDef])(implicit ctx: Context): Match
 
+  /** Tree representing a pattern match `implicit match  { ... }` in the source code */
+  type ImplicitMatch <: Term
+
+  def matchImplicitMatch(tree: Tree)(implicit ctx: Context): Option[ImplicitMatch]
+
+  def ImplicitMatch_cases(self: ImplicitMatch)(implicit ctx: Context): List[CaseDef]
+
+  def ImplicitMatch_apply(cases: List[CaseDef])(implicit ctx: Context): ImplicitMatch
+  def ImplicitMatch_copy(original: Tree)(cases: List[CaseDef])(implicit ctx: Context): ImplicitMatch
+
   /** Tree representing a tyr catch `try x catch { ... } finally { ... }` in the source code */
   type Try <: Term
 
@@ -478,12 +510,12 @@ trait Kernel {
 
   def matchInlined(tree: Tree)(implicit ctx: Context): Option[Inlined]
 
-  def Inlined_call(self: Inlined)(implicit ctx: Context): Option[TermOrTypeTree]
+  def Inlined_call(self: Inlined)(implicit ctx: Context): Option[Tree/* Term | TypeTree */]
   def Inlined_bindings(self: Inlined)(implicit ctx: Context): List[Definition]
   def Inlined_body(self: Inlined)(implicit ctx: Context): Term
 
-  def Inlined_apply(call: Option[TermOrTypeTree], bindings: List[Definition], expansion: Term)(implicit ctx: Context): Inlined
-  def Inlined_copy(original: Tree)(call: Option[TermOrTypeTree], bindings: List[Definition], expansion: Term)(implicit ctx: Context): Inlined
+  def Inlined_apply(call: Option[Tree/* Term | TypeTree */], bindings: List[Definition], expansion: Term)(implicit ctx: Context): Inlined
+  def Inlined_copy(original: Tree)(call: Option[Tree/* Term | TypeTree */], bindings: List[Definition], expansion: Term)(implicit ctx: Context): Inlined
 
   /** Tree representing a selection of definition with a given name on a given prefix and number of nested scopes of inlined trees */
   type SelectOuter <: Term
@@ -508,12 +540,171 @@ trait Kernel {
   def While_apply(cond: Term, body: Term)(implicit ctx: Context): While
   def While_copy(original: Tree)(cond: Term, body: Term)(implicit ctx: Context): While
 
-  //
-  // CASES
-  //
-  
+  /** Type tree representing a type written in the source */
+  type TypeTree <: Tree
+
+  def matchTypeTree(tree: Tree)(implicit ctx: Context): Option[TypeTree]
+
+  def TypeTree_pos(self: TypeTree)(implicit ctx: Context): Position
+  def TypeTree_symbol(self: TypeTree)(implicit ctx: Context): Symbol
+  def TypeTree_tpe(self: TypeTree)(implicit ctx: Context): Type
+
+  /** Type tree representing an inferred type */
+  type Inferred <: TypeTree
+
+  def matchInferred(tree: Tree)(implicit ctx: Context): Option[Inferred]
+
+  def Inferred_apply(tpe: Type)(implicit ctx: Context): Inferred
+
+  /** Type tree representing a reference to definition with a given name */
+  type TypeIdent <: TypeTree
+
+  def matchTypeIdent(tree: Tree)(implicit ctx: Context): Option[TypeIdent]
+
+  def TypeIdent_name(self: TypeIdent)(implicit ctx: Context): String
+
+  def TypeIdent_copy(original: TypeIdent)(name: String)(implicit ctx: Context): TypeIdent
+
+  /** Type tree representing a selection of definition with a given name on a given term prefix */
+  type TypeSelect <: TypeTree
+
+  def matchTypeSelect(tree: Tree)(implicit ctx: Context): Option[TypeSelect]
+
+  def TypeSelect_qualifier(self: TypeSelect)(implicit ctx: Context): Term
+  def TypeSelect_name(self: TypeSelect)(implicit ctx: Context): String
+
+  def TypeSelect_apply(qualifier: Term, name: String)(implicit ctx: Context): TypeSelect
+  def TypeSelect_copy(original: TypeSelect)(qualifier: Term, name: String)(implicit ctx: Context): TypeSelect
+
+  /** Type tree representing a selection of definition with a given name on a given type prefix */
+  type Projection <: TypeTree
+
+  def matchProjection(tree: Tree)(implicit ctx: Context): Option[Projection]
+
+  def Projection_qualifier(self: Projection)(implicit ctx: Context): TypeTree
+  def Projection_name(self: Projection)(implicit ctx: Context): String
+
+  def Projection_copy(original: Projection)(qualifier: TypeTree, name: String)(implicit ctx: Context): Projection
+
+  /** Type tree representing a singleton type */
+  type Singleton <: TypeTree
+
+  def matchSingleton(tree: Tree)(implicit ctx: Context): Option[Singleton]
+
+  def Singleton_ref(self: Singleton)(implicit ctx: Context): Term
+
+  def Singleton_apply(ref: Term)(implicit ctx: Context): Singleton
+  def Singleton_copy(original: Singleton)(ref: Term)(implicit ctx: Context): Singleton
+
+  /** Type tree representing a type refinement */
+  type Refined <: TypeTree
+
+  def matchRefined(tree: Tree)(implicit ctx: Context): Option[Refined]
+
+  def Refined_tpt(self: Refined)(implicit ctx: Context): TypeTree
+  def Refined_refinements(self: Refined)(implicit ctx: Context): List[Definition]
+
+  def Refined_copy(original: Refined)(tpt: TypeTree, refinements: List[Definition])(implicit ctx: Context): Refined
+
+  /** Type tree representing a type application */
+  type Applied <: TypeTree
+
+  def matchApplied(tree: Tree)(implicit ctx: Context): Option[Applied]
+
+  def Applied_tpt(self: Applied)(implicit ctx: Context): TypeTree
+  def Applied_args(self: Applied)(implicit ctx: Context): List[Tree /*TypeTree | TypeBoundsTree*/]
+
+  def Applied_apply(tpt: TypeTree, args: List[Tree /*TypeTree | TypeBoundsTree*/])(implicit ctx: Context): Applied
+  def Applied_copy(original: Applied)(tpt: TypeTree, args: List[Tree /*TypeTree | TypeBoundsTree*/])(implicit ctx: Context): Applied
+
+  /** Type tree representing an annotated type */
+  type Annotated <: TypeTree
+
+  def matchAnnotated(tree: Tree)(implicit ctx: Context): Option[Annotated]
+
+  def Annotated_arg(self: Annotated)(implicit ctx: Context): TypeTree
+  def Annotated_annotation(self: Annotated)(implicit ctx: Context): Term
+
+  def Annotated_apply(arg: TypeTree, annotation: Term)(implicit ctx: Context): Annotated
+  def Annotated_copy(original: Annotated)(arg: TypeTree, annotation: Term)(implicit ctx: Context): Annotated
+
+  /** Type tree representing a type match */
+  type MatchTypeTree <: TypeTree
+
+  def matchMatchTypeTree(tree: Tree)(implicit ctx: Context): Option[MatchTypeTree]
+
+  def MatchTypeTree_bound(self: MatchTypeTree)(implicit ctx: Context): Option[TypeTree]
+  def MatchTypeTree_selector(self: MatchTypeTree)(implicit ctx: Context): TypeTree
+  def MatchTypeTree_cases(self: MatchTypeTree)(implicit ctx: Context): List[TypeCaseDef]
+
+  def MatchTypeTree_apply(bound: Option[TypeTree], selector: TypeTree, cases: List[TypeCaseDef])(implicit ctx: Context): MatchTypeTree
+  def MatchTypeTree_copy(original: MatchTypeTree)(bound: Option[TypeTree], selector: TypeTree, cases: List[TypeCaseDef])(implicit ctx: Context): MatchTypeTree
+
+  /** Type tree representing a by name parameter */
+  type ByName <: TypeTree
+
+  def ByName_result(self: ByName)(implicit ctx: Context): TypeTree
+
+  def matchByName(tree: Tree)(implicit ctx: Context): Option[ByName]
+
+  def ByName_apply(result: TypeTree)(implicit ctx: Context): ByName
+  def ByName_copy(original: ByName)(result: TypeTree)(implicit ctx: Context): ByName
+
+  /** Type tree representing a lambda abstraction type */
+  type LambdaTypeTree <: TypeTree
+
+  def matchLambdaTypeTree(tree: Tree)(implicit ctx: Context): Option[LambdaTypeTree]
+
+  def Lambdatparams(self: LambdaTypeTree)(implicit ctx: Context): List[TypeDef]
+  def Lambdabody(self: LambdaTypeTree)(implicit ctx: Context): Tree /*TypeTree | TypeBoundsTree*/
+
+  def Lambdaapply(tparams: List[TypeDef], body: Tree /*TypeTree | TypeBoundsTree*/)(implicit ctx: Context): LambdaTypeTree
+  def Lambdacopy(original: LambdaTypeTree)(tparams: List[TypeDef], body: Tree /*TypeTree | TypeBoundsTree*/)(implicit ctx: Context): LambdaTypeTree
+
+  /** Type tree representing a type binding */
+  type TypeBind <: TypeTree
+
+  def matchTypeBind(tree: Tree)(implicit ctx: Context): Option[TypeBind]
+
+  def TypeBind_name(self: TypeBind)(implicit ctx: Context): String
+  def TypeBind_body(self: TypeBind)(implicit ctx: Context): Tree /*TypeTree | TypeBoundsTree*/
+
+  def TypeBind_copy(original: TypeBind)(name: String, tpt: Tree /*TypeTree | TypeBoundsTree*/)(implicit ctx: Context): TypeBind
+
+  /** Type tree within a block with aliases `{ type U1 = ... ; T[U1, U2] }` */
+  type TypeBlock <: TypeTree
+
+  def matchTypeBlock(tree: Tree)(implicit ctx: Context): Option[TypeBlock]
+
+  def TypeBlock_aliases(self: TypeBlock)(implicit ctx: Context): List[TypeDef]
+  def TypeBlock_tpt(self: TypeBlock)(implicit ctx: Context): TypeTree
+
+  def TypeBlock_apply(aliases: List[TypeDef], tpt: TypeTree)(implicit ctx: Context): TypeBlock
+  def TypeBlock_copy(original: TypeBlock)(aliases: List[TypeDef], tpt: TypeTree)(implicit ctx: Context): TypeBlock
+
+  /** Type tree representing a type bound written in the source */
+  type TypeBoundsTree <: Tree /*TypeTree | TypeBoundsTree*/
+
+  def matchTypeBoundsTree(tree: Tree)(implicit ctx: Context): Option[TypeBoundsTree]
+
+  def TypeBoundsTree_tpe(self: TypeBoundsTree)(implicit ctx: Context): TypeBounds
+  def TypeBoundsTree_low(self: TypeBoundsTree)(implicit ctx: Context): TypeTree
+  def TypeBoundsTree_hi(self: TypeBoundsTree)(implicit ctx: Context): TypeTree
+
+  /** Type tree representing wildcard type bounds written in the source.
+    *  The wildcard type `_` (for example in in `List[_]`) will be a type tree that
+    *  represents a type but has `TypeBound`a inside.
+    */
+  type WildcardTypeTree <: Tree
+
+  def matchWildcardTypeTree(tree: Tree)(implicit ctx: Context): Option[WildcardTypeTree]
+
+  def WildcardTypeTree_tpe(self: WildcardTypeTree)(implicit ctx: Context): TypeOrBounds
+
   /** Branch of a pattern match or catch clause */
-  type CaseDef <: AnyRef
+  type CaseDef <: Tree
+
+  def matchCaseDef(tree: Tree)(implicit ctx: Context): Option[CaseDef]
 
   def CaseDef_pattern(self: CaseDef)(implicit ctx: Context): Pattern
   def CaseDef_guard(self: CaseDef)(implicit ctx: Context): Option[Term]
@@ -523,7 +714,9 @@ trait Kernel {
   def CaseDef_module_copy(original: CaseDef)(pattern: Pattern, guard: Option[Term], body: Term)(implicit ctx: Context): CaseDef
 
   /** Branch of a type pattern match */
-  type TypeCaseDef <: AnyRef
+  type TypeCaseDef <: Tree
+
+  def matchTypeCaseDef(tree: Tree)(implicit ctx: Context): Option[TypeCaseDef]
 
   def TypeCaseDef_pattern(self: TypeCaseDef)(implicit ctx: Context): TypeTree
   def TypeCaseDef_rhs(self: TypeCaseDef)(implicit ctx: Context): TypeTree
@@ -534,7 +727,7 @@ trait Kernel {
   //
   // PATTERNS
   //
-  
+
   /** Pattern tree of the pattern part of a CaseDef */
   type Pattern <: AnyRef
 
@@ -597,175 +790,6 @@ trait Kernel {
   def Pattern_TypeTest_module_copy(original: TypeTest)(tpt: TypeTree)(implicit ctx: Context): TypeTest
 
   //
-  // TYPE TREES
-  //
-  
-  /** Type tree representing a type or a bounds written in the source */
-  type TypeOrBoundsTree <: AnyRef
-
-  def TypeOrBoundsTree_tpe(self: TypeOrBoundsTree)(implicit ctx: Context): Type
-
-  /** Type tree representing a type written in the source */
-  type TypeTree <: TypeOrBoundsTree
-
-  def matchTypeTree(x: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree]
-  def matchTypeTreeNotTerm(termOrTypeTree: TermOrTypeTree)(implicit ctx: Context): Option[TypeTree]
-
-  def TypeTree_pos(self: TypeTree)(implicit ctx: Context): Position
-  def TypeTree_symbol(self: TypeTree)(implicit ctx: Context): Symbol
-  def TypeTree_tpe(self: TypeTree)(implicit ctx: Context): Type
-
-  /** Type tree representing an inferred type */
-  type TypeTree_Inferred <: TypeTree
-
-  def matchTypeTree_Inferred(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_Inferred]
-
-  def TypeTree_Inferred_apply(tpe: Type)(implicit ctx: Context): TypeTree_Inferred
-
-  /** Type tree representing a reference to definition with a given name */
-  type TypeTree_Ident <: TypeTree
-
-  def matchTypeTree_Ident(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_Ident]
-
-  def TypeTree_Ident_name(self: TypeTree_Ident)(implicit ctx: Context): String
-
-  def TypeTree_Ident_copy(original: TypeTree_Ident)(name: String)(implicit ctx: Context): TypeTree_Ident
-
-  /** Type tree representing a selection of definition with a given name on a given term prefix */
-  type TypeTree_Select <: TypeTree
-
-  def matchTypeTree_Select(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_Select]
-
-  def TypeTree_Select_qualifier(self: TypeTree_Select)(implicit ctx: Context): Term
-  def TypeTree_Select_name(self: TypeTree_Select)(implicit ctx: Context): String
-
-  def TypeTree_Select_apply(qualifier: Term, name: String)(implicit ctx: Context): TypeTree_Select
-  def TypeTree_Select_copy(original: TypeTree_Select)(qualifier: Term, name: String)(implicit ctx: Context): TypeTree_Select
-
-  /** Type tree representing a selection of definition with a given name on a given type prefix */
-  type TypeTree_Projection <: TypeTree
-
-  def matchTypeTree_Projection(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_Projection]
-
-  def TypeTree_Projection_qualifier(self: TypeTree_Projection)(implicit ctx: Context): TypeTree
-  def TypeTree_Projection_name(self: TypeTree_Projection)(implicit ctx: Context): String
-
-  def TypeTree_Projection_copy(original: TypeTree_Projection)(qualifier: TypeTree, name: String)(implicit ctx: Context): TypeTree_Projection
-
-  /** Type tree representing a singleton type */
-  type TypeTree_Singleton <: TypeTree
-
-  def matchTypeTree_Singleton(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_Singleton]
-
-  def TypeTree_Singleton_ref(self: TypeTree_Singleton)(implicit ctx: Context): Term
-
-  def TypeTree_Singleton_apply(ref: Term)(implicit ctx: Context): TypeTree_Singleton
-  def TypeTree_Singleton_copy(original: TypeTree_Singleton)(ref: Term)(implicit ctx: Context): TypeTree_Singleton
-
-  /** Type tree representing a type refinement */
-  type TypeTree_Refined <: TypeTree
-
-  def matchTypeTree_Refined(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_Refined]
-
-  def TypeTree_Refined_tpt(self: TypeTree_Refined)(implicit ctx: Context): TypeTree
-  def TypeTree_Refined_refinements(self: TypeTree_Refined)(implicit ctx: Context): List[Definition]
-
-  def TypeTree_Refined_copy(original: TypeTree_Refined)(tpt: TypeTree, refinements: List[Definition])(implicit ctx: Context): TypeTree_Refined
-
-  /** Type tree representing a type application */
-  type TypeTree_Applied <: TypeTree
-
-  def matchTypeTree_Applied(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_Applied]
-
-  def TypeTree_Applied_tpt(self: TypeTree_Applied)(implicit ctx: Context): TypeTree
-  def TypeTree_Applied_args(self: TypeTree_Applied)(implicit ctx: Context): List[TypeOrBoundsTree]
-
-  def TypeTree_Applied_apply(tpt: TypeTree, args: List[TypeOrBoundsTree])(implicit ctx: Context): TypeTree_Applied
-  def TypeTree_Applied_copy(original: TypeTree_Applied)(tpt: TypeTree, args: List[TypeOrBoundsTree])(implicit ctx: Context): TypeTree_Applied
-
-  /** Type tree representing an annotated type */
-  type TypeTree_Annotated <: TypeTree
-
-  def matchTypeTree_Annotated(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_Annotated]
-
-  def TypeTree_Annotated_arg(self: TypeTree_Annotated)(implicit ctx: Context): TypeTree
-  def TypeTree_Annotated_annotation(self: TypeTree_Annotated)(implicit ctx: Context): Term
-
-  def TypeTree_Annotated_apply(arg: TypeTree, annotation: Term)(implicit ctx: Context): TypeTree_Annotated
-  def TypeTree_Annotated_copy(original: TypeTree_Annotated)(arg: TypeTree, annotation: Term)(implicit ctx: Context): TypeTree_Annotated
-
-  /** Type tree representing a type match */
-  type TypeTree_MatchType <: TypeTree
-
-  def matchTypeTree_MatchType(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_MatchType]
-
-  def TypeTree_MatchType_bound(self: TypeTree_MatchType)(implicit ctx: Context): Option[TypeTree]
-  def TypeTree_MatchType_selector(self: TypeTree_MatchType)(implicit ctx: Context): TypeTree
-  def TypeTree_MatchType_cases(self: TypeTree_MatchType)(implicit ctx: Context): List[TypeCaseDef]
-
-  def TypeTree_MatchType_apply(bound: Option[TypeTree], selector: TypeTree, cases: List[TypeCaseDef])(implicit ctx: Context): TypeTree_MatchType
-  def TypeTree_MatchType_copy(original: TypeTree_MatchType)(bound: Option[TypeTree], selector: TypeTree, cases: List[TypeCaseDef])(implicit ctx: Context): TypeTree_MatchType
-
-  /** Type tree representing a by name parameter */
-  type TypeTree_ByName <: TypeTree
-
-  def TypeTree_ByName_result(self: TypeTree_ByName)(implicit ctx: Context): TypeTree
-
-  def matchTypeTree_ByName(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_ByName]
-
-  def TypeTree_ByName_apply(result: TypeTree)(implicit ctx: Context): TypeTree_ByName
-  def TypeTree_ByName_copy(original: TypeTree_ByName)(result: TypeTree)(implicit ctx: Context): TypeTree_ByName
-
-  /** Type tree representing a lambda abstraction type */
-  type TypeTree_LambdaTypeTree <: TypeTree
-
-  def matchTypeTree_LambdaTypeTree(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_LambdaTypeTree]
-
-  def TypeTree_LambdaTypeTree_tparams(self: TypeTree_LambdaTypeTree)(implicit ctx: Context): List[TypeDef]
-  def TypeTree_LambdaTypeTree_body(self: TypeTree_LambdaTypeTree)(implicit ctx: Context): TypeOrBoundsTree
-
-  def TypeTree_LambdaTypeTree_apply(tparams: List[TypeDef], body: TypeOrBoundsTree)(implicit ctx: Context): TypeTree_LambdaTypeTree
-  def TypeTree_LambdaTypeTree_copy(original: TypeTree_LambdaTypeTree)(tparams: List[TypeDef], body: TypeOrBoundsTree)(implicit ctx: Context): TypeTree_LambdaTypeTree
-
-  /** Type tree representing a type binding */
-  type TypeTree_TypeBind <: TypeTree
-
-  def matchTypeTree_TypeBind(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_TypeBind]
-
-  def TypeTree_TypeBind_name(self: TypeTree_TypeBind)(implicit ctx: Context): String
-  def TypeTree_TypeBind_body(self: TypeTree_TypeBind)(implicit ctx: Context): TypeOrBoundsTree
-
-  def TypeTree_TypeBind_copy(original: TypeTree_TypeBind)(name: String, tpt: TypeOrBoundsTree)(implicit ctx: Context): TypeTree_TypeBind
-
-  /** Type tree within a block with aliases `{ type U1 = ... ; T[U1, U2] }` */
-  type TypeTree_TypeBlock <: TypeTree
-
-  def matchTypeTree_TypeBlock(tpt: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeTree_TypeBlock]
-
-  def TypeTree_TypeBlock_aliases(self: TypeTree_TypeBlock)(implicit ctx: Context): List[TypeDef]
-  def TypeTree_TypeBlock_tpt(self: TypeTree_TypeBlock)(implicit ctx: Context): TypeTree
-
-  def TypeTree_TypeBlock_apply(aliases: List[TypeDef], tpt: TypeTree)(implicit ctx: Context): TypeTree_TypeBlock
-  def TypeTree_TypeBlock_copy(original: TypeTree_TypeBlock)(aliases: List[TypeDef], tpt: TypeTree)(implicit ctx: Context): TypeTree_TypeBlock
-
-  /** Type tree representing a type bound written in the source */
-  type TypeBoundsTree <: TypeOrBoundsTree
-
-  def matchTypeBoundsTree(x: TypeOrBoundsTree)(implicit ctx: Context): Option[TypeBoundsTree]
-
-  def TypeBoundsTree_tpe(self: TypeBoundsTree)(implicit ctx: Context): TypeBounds
-  def TypeBoundsTree_low(self: TypeBoundsTree)(implicit ctx: Context): TypeTree
-  def TypeBoundsTree_hi(self: TypeBoundsTree)(implicit ctx: Context): TypeTree
-
-  /** Type tree representing wildcard type bounds written in the source.
-   *  The wildcard type `_` (for example in in `List[_]`) will be a type tree that
-   *  represents a type but has `TypeBound`a inside.
-   */
-  type WildcardTypeTree <: TypeOrBoundsTree
-
-  def matchWildcardTypeTree(x: TypeOrBoundsTree)(implicit ctx: Context): Option[WildcardTypeTree]
-
-  //
   // TYPES
   //
 
@@ -804,7 +828,13 @@ trait Kernel {
     */
   def Type_widen(self: Type)(implicit ctx: Context): Type
 
-  def Type_classSymbol(self: Type)(implicit ctx: Context): Option[ClassSymbol]
+  /** Follow aliases and dereferences LazyRefs, annotated types and instantiated
+   *  TypeVars until type is no longer alias type, annotated type, LazyRef,
+   *  or instantiated type variable.
+   */
+  def Type_dealias(self: Type)(implicit ctx: Context): Type
+
+  def Type_classSymbol(self: Type)(implicit ctx: Context): Option[ClassDefSymbol]
 
   def Type_typeSymbol(self: Type)(implicit ctx: Context): Symbol
 
@@ -1035,7 +1065,7 @@ trait Kernel {
   // POSITIONS
   //
 
-  /** Source position */
+  /** Position in a source file */
   type Position <: AnyRef
 
   /** The start offset in the source file */
@@ -1048,7 +1078,7 @@ trait Kernel {
   def Position_exists(self: Position): Boolean
 
   /** Source file in which this position is located */
-  def Position_sourceFile(self: Position): java.nio.file.Path
+  def Position_sourceFile(self: Position): SourceFile
 
   /** The start line in the source file */
   def Position_startLine(self: Position): Int
@@ -1064,6 +1094,19 @@ trait Kernel {
 
   /** Source code within the position */
   def Position_sourceCode(self: Position): String
+
+  //
+  // SOURCE FILE
+  //
+
+  /** Scala source file */
+  type SourceFile <: AnyRef
+
+  /** Path to a source file */
+  def SourceFile_jpath(self: SourceFile): java.nio.file.Path
+
+  /** Content of a source file */
+  def SourceFile_content(self: SourceFile): String
 
   //
   // COMMENTS
@@ -1168,88 +1211,104 @@ trait Kernel {
   def Symbol_isDefinedInCurrentRun(self: Symbol)(implicit ctx: Context): Boolean
 
   /** Symbol of a package definition */
-  type PackageSymbol <: Symbol
+  type PackageDefSymbol <: Symbol
 
-  def matchPackageSymbol(symbol: Symbol)(implicit ctx: Context): Option[PackageSymbol]
+  def matchPackageDefSymbol(symbol: Symbol)(implicit ctx: Context): Option[PackageDefSymbol]
 
-  def PackageSymbol_tree(self: PackageSymbol)(implicit ctx: Context): PackageDef
+  def PackageDefSymbol_tree(self: PackageDefSymbol)(implicit ctx: Context): PackageDef
 
-  /** Symbol of a class definition. This includes anonymous class definitions and the class of a module object. */
-  type ClassSymbol <: Symbol
-
-  def matchClassSymbol(symbol: Symbol)(implicit ctx: Context): Option[ClassSymbol]
-
-  /** ClassDef tree of this defintion */
-  def ClassSymbol_tree(self: ClassSymbol)(implicit ctx: Context): ClassDef
-
-  /** Fields directly declared in the class */
-  def ClassSymbol_fields(self: Symbol)(implicit ctx: Context): List[Symbol]
-
-  /** Field with the given name directly declared in the class */
-  def ClassSymbol_field(self: Symbol)(name: String)(implicit ctx: Context): Option[Symbol]
-
-  /** Get non-private named methods defined directly inside the class */
-  def ClassSymbol_classMethod(self: Symbol)(name: String)(implicit ctx: Context): List[DefSymbol]
-
-  /** Get all non-private methods defined directly inside the class, exluding constructors */
-  def ClassSymbol_classMethods(self: Symbol)(implicit ctx: Context): List[DefSymbol]
-
-  /** Get named non-private methods declared or inherited */
-  def ClassSymbol_method(self: Symbol)(name: String)(implicit ctx: Context): List[DefSymbol]
-
-  /** Get all non-private methods declared or inherited */
-  def ClassSymbol_methods(self: Symbol)(implicit ctx: Context): List[DefSymbol]
-
-  /** Fields of a case class type -- only the ones declared in primary constructor */
-  def ClassSymbol_caseFields(self: Symbol)(implicit ctx: Context): List[ValSymbol]
-
-  /** The class symbol of the companion module class */
-  def ClassSymbol_companionClass(self: Symbol)(implicit ctx: Context): Option[ClassSymbol]
-
-  /** The symbol of the companion module */
-  def ClassSymbol_companionModule(self: Symbol)(implicit ctx: Context): Option[ValSymbol]
-
-  /** The symbol of the class of the companion module */
-  def ClassSymbol_moduleClass(self: Symbol)(implicit ctx: Context): Option[Symbol]
-
-  def ClassSymbol_of(fullName: String)(implicit ctx: Context): ClassSymbol
-
-  /** Symbol of a type (parameter or member) definition. */
   type TypeSymbol <: Symbol
 
   def matchTypeSymbol(symbol: Symbol)(implicit ctx: Context): Option[TypeSymbol]
 
-  def TypeSymbol_isTypeParam(self: TypeSymbol)(implicit ctx: Context): Boolean
+  /** Symbol of a class definition. This includes anonymous class definitions and the class of a module object. */
+  type ClassDefSymbol <: TypeSymbol
 
-  /** TypeDef tree of this definition */
-  def TypeSymbol_tree(self: TypeSymbol)(implicit ctx: Context): TypeDef
+  def matchClassDefSymbol(symbol: Symbol)(implicit ctx: Context): Option[ClassDefSymbol]
 
-  /** Symbol representing a method definition. */
-  type DefSymbol <: Symbol
+  /** ClassDef tree of this definition */
+  def ClassDefSymbol_tree(self: ClassDefSymbol)(implicit ctx: Context): ClassDef
 
-  def matchDefSymbol(symbol: Symbol)(implicit ctx: Context): Option[DefSymbol]
+  /** Fields directly declared in the class */
+  def ClassDefSymbol_fields(self: Symbol)(implicit ctx: Context): List[Symbol]
 
-  /** DefDef tree of this defintion */
-  def DefSymbol_tree(self: DefSymbol)(implicit ctx: Context): DefDef
+  /** Field with the given name directly declared in the class */
+  def ClassDefSymbol_field(self: Symbol)(name: String)(implicit ctx: Context): Option[Symbol]
 
-  /** Signature of this defintion */
-  def DefSymbol_signature(self: DefSymbol)(implicit ctx: Context): Signature
+  /** Get non-private named methods defined directly inside the class */
+  def ClassDefSymbol_classMethod(self: Symbol)(name: String)(implicit ctx: Context): List[DefDefSymbol]
 
-  /** Symbol representing a value definition. This includes `val`, `lazy val`, `var`, `object` and parameter definitions. */
-  type ValSymbol <: Symbol
+  /** Get all non-private methods defined directly inside the class, excluding constructors */
+  def ClassDefSymbol_classMethods(self: Symbol)(implicit ctx: Context): List[DefDefSymbol]
 
-  def matchValSymbol(symbol: Symbol)(implicit ctx: Context): Option[ValSymbol]
+  /** Get named non-private methods declared or inherited */
+  def ClassDefSymbol_method(self: Symbol)(name: String)(implicit ctx: Context): List[DefDefSymbol]
 
-  /** ValDef tree of this defintion */
-  def ValSymbol_tree(self: ValSymbol)(implicit ctx: Context): ValDef
+  /** Get all non-private methods declared or inherited */
+  def ClassDefSymbol_methods(self: Symbol)(implicit ctx: Context): List[DefDefSymbol]
+
+  /** Fields of a case class type -- only the ones declared in primary constructor */
+  def ClassDefSymbol_caseFields(self: Symbol)(implicit ctx: Context): List[ValDefSymbol]
 
   /** The class symbol of the companion module class */
-  def ValSymbol_moduleClass(self: ValSymbol)(implicit ctx: Context): Option[ClassSymbol]
+  def ClassDefSymbol_companionClass(self: Symbol)(implicit ctx: Context): Option[ClassDefSymbol]
 
-  def ValSymbol_companionClass(self: ValSymbol)(implicit ctx: Context): Option[ClassSymbol]
+  /** The symbol of the companion module */
+  def ClassDefSymbol_companionModule(self: Symbol)(implicit ctx: Context): Option[ValDefSymbol]
+
+  /** The symbol of the class of the companion module */
+  def ClassDefSymbol_moduleClass(self: Symbol)(implicit ctx: Context): Option[Symbol]
+
+  def ClassDefSymbol_of(fullName: String)(implicit ctx: Context): ClassDefSymbol
+
+  /** Symbol of a type (parameter or member) definition. */
+  type TypeDefSymbol <: TypeSymbol
+
+  def matchTypeDefSymbol(symbol: Symbol)(implicit ctx: Context): Option[TypeDefSymbol]
+
+  def TypeDefSymbol_isTypeParam(self: TypeDefSymbol)(implicit ctx: Context): Boolean
+
+  /** TypeDef tree of this definition */
+  def TypeDefSymbol_tree(self: TypeDefSymbol)(implicit ctx: Context): TypeDef
 
   /** Symbol representing a bind definition. */
-  type BindSymbol <: Symbol
+  type TypeBindSymbol <: TypeSymbol
+
+  def matchTypeBindSymbol(symbol: Symbol)(implicit ctx: Context): Option[TypeBindSymbol]
+
+  /** TypeBind pattern of this definition */
+  def TypeBindSymbol_tree(self: TypeBindSymbol)(implicit ctx: Context): TypeBind
+
+  type TermSymbol <: Symbol
+
+  def matchTermSymbol(symbol: Symbol)(implicit ctx: Context): Option[TermSymbol]
+
+  /** Symbol representing a method definition. */
+  type DefDefSymbol <: TermSymbol
+
+  def matchDefDefSymbol(symbol: Symbol)(implicit ctx: Context): Option[DefDefSymbol]
+
+  /** DefDef tree of this definition */
+  def DefDefSymbol_tree(self: DefDefSymbol)(implicit ctx: Context): DefDef
+
+  /** Signature of this definition */
+  def DefDefSymbol_signature(self: DefDefSymbol)(implicit ctx: Context): Signature
+
+  /** Symbol representing a value definition. This includes `val`, `lazy val`, `var`, `object` and parameter definitions. */
+  type ValDefSymbol <: TermSymbol
+
+  def matchValDefSymbol(symbol: Symbol)(implicit ctx: Context): Option[ValDefSymbol]
+
+  /** ValDef tree of this definition */
+  def ValDefSymbol_tree(self: ValDefSymbol)(implicit ctx: Context): ValDef
+
+  /** The class symbol of the companion module class */
+  def ValDefSymbol_moduleClass(self: ValDefSymbol)(implicit ctx: Context): Option[ClassDefSymbol]
+
+  def ValDefSymbol_companionClass(self: ValDefSymbol)(implicit ctx: Context): Option[ClassDefSymbol]
+
+  /** Symbol representing a bind definition. */
+  type BindSymbol <: TermSymbol
 
   def matchBindSymbol(symbol: Symbol)(implicit ctx: Context): Option[BindSymbol]
 
@@ -1311,7 +1370,6 @@ trait Kernel {
   def Flags_ModuleClass: Flags
   def Flags_PrivateLocal: Flags
   def Flags_Package: Flags
-  def Flags_ImplClass: Flags
 
   //
   // QUOTED SEAL/UNSEAL

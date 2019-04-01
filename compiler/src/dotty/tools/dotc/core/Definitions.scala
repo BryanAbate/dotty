@@ -184,8 +184,8 @@ class Definitions {
     arr
   }
 
-  private def completeClass(cls: ClassSymbol): ClassSymbol = {
-    ensureConstructor(cls, EmptyScope)
+  private def completeClass(cls: ClassSymbol, ensureCtor: Boolean = true): ClassSymbol = {
+    if (ensureCtor) ensureConstructor(cls, EmptyScope)
     if (cls.linkedClass.exists) cls.linkedClass.info = NoType
     cls
   }
@@ -262,7 +262,7 @@ class Definitions {
    *       def getClass: java.lang.Class[T] = ???
    *     }
    */
-  lazy val AnyClass: ClassSymbol = completeClass(enterCompleteClassSymbol(ScalaPackageClass, tpnme.Any, Abstract, Nil))
+  lazy val AnyClass: ClassSymbol = completeClass(enterCompleteClassSymbol(ScalaPackageClass, tpnme.Any, Abstract, Nil), ensureCtor = false)
   def AnyType: TypeRef = AnyClass.typeRef
   lazy val AnyValClass: ClassSymbol = completeClass(enterCompleteClassSymbol(ScalaPackageClass, tpnme.AnyVal, Abstract, List(AnyClass.typeRef)))
   def AnyValType: TypeRef = AnyValClass.typeRef
@@ -320,7 +320,7 @@ class Definitions {
 
   lazy val AnyKindClass: ClassSymbol = {
     val cls = ctx.newCompleteClassSymbol(ScalaPackageClass, tpnme.AnyKind, AbstractFinal | Permanent, Nil)
-    if (ctx.settings.YkindPolymorphism.value) {
+    if (!ctx.settings.YnoKindPolymorphism.value) {
       // Enable kind-polymorphism by exposing scala.AnyKind
       cls.entered
     }
@@ -444,7 +444,7 @@ class Definitions {
     def Seq_head(implicit ctx: Context): Symbol = Seq_headR.symbol
     lazy val Seq_dropR: TermRef = SeqClass.requiredMethodRef(nme.drop)
     def Seq_drop(implicit ctx: Context): Symbol = Seq_dropR.symbol
-    lazy val Seq_lengthCompareR: TermRef = SeqClass.requiredMethodRef(nme.lengthCompare)
+    lazy val Seq_lengthCompareR: TermRef = SeqClass.requiredMethodRef(nme.lengthCompare, List(IntType))
     def Seq_lengthCompare(implicit ctx: Context): Symbol = Seq_lengthCompareR.symbol
     lazy val Seq_lengthR: TermRef = SeqClass.requiredMethodRef(nme.length)
     def Seq_length(implicit ctx: Context): Symbol = Seq_lengthR.symbol
@@ -704,10 +704,15 @@ class Definitions {
 
   lazy val QuotedExprType: TypeRef = ctx.requiredClassRef("scala.quoted.Expr")
   def QuotedExprClass(implicit ctx: Context): ClassSymbol = QuotedExprType.symbol.asClass
-  def QuotedExprModule(implicit ctx: Context): Symbol = QuotedExprClass.companionModule
-    lazy val QuotedExpr_applyR: TermRef = QuotedExprModule.requiredMethodRef(nme.apply)
-    def QuotedExpr_apply(implicit ctx: Context): Symbol = QuotedExpr_applyR.symbol
-    lazy val QuotedExpr_splice : TermSymbol = QuotedExprClass.requiredMethod(nme.splice)
+
+  lazy val InternalQuotedModule: TermRef = ctx.requiredModuleRef("scala.internal.Quoted")
+  def InternalQuotedModuleClass: Symbol = InternalQuotedModule.symbol
+    lazy val InternalQuoted_exprQuoteR: TermRef = InternalQuotedModuleClass.requiredMethodRef("exprQuote".toTermName)
+    def InternalQuoted_exprQuote(implicit ctx: Context): Symbol = InternalQuoted_exprQuoteR.symbol
+    lazy val InternalQuoted_exprSpliceR: TermRef = InternalQuotedModuleClass.requiredMethodRef("exprSplice".toTermName)
+    def InternalQuoted_exprSplice(implicit ctx: Context): Symbol = InternalQuoted_exprSpliceR.symbol
+    lazy val InternalQuoted_typeQuoteR: TermRef = InternalQuotedModuleClass.requiredMethodRef("typeQuote".toTermName)
+    def InternalQuoted_typeQuote(implicit ctx: Context): Symbol = InternalQuoted_typeQuoteR.symbol
 
   lazy val QuotedExprsModule: TermSymbol = ctx.requiredModule("scala.quoted.Exprs")
   def QuotedExprsClass(implicit ctx: Context): ClassSymbol = QuotedExprsModule.asClass
@@ -720,8 +725,6 @@ class Definitions {
 
   lazy val QuotedTypeModuleType: TermRef = ctx.requiredModuleRef("scala.quoted.Type")
   def QuotedTypeModule(implicit ctx: Context): Symbol = QuotedTypeModuleType.symbol
-    lazy val QuotedType_applyR: TermRef = QuotedTypeModule.requiredMethodRef(nme.apply)
-    def QuotedType_apply(implicit ctx: Context): Symbol = QuotedType_applyR.symbol
 
   lazy val QuotedLiftableModule: TermSymbol = ctx.requiredModule("scala.quoted.Liftable")
   def QuotedLiftableModuleClass(implicit ctx: Context): ClassSymbol = QuotedLiftableModule.asClass
@@ -758,6 +761,9 @@ class Definitions {
   lazy val TypeBoxType: TypeRef = ctx.requiredClassRef("scala.internal.TypeBox")
 
     lazy val TypeBox_CAP: TypeSymbol = TypeBoxType.symbol.requiredType(tpnme.CAP)
+
+  lazy val MatchCaseType: TypeRef = ctx.requiredClassRef("scala.internal.MatchCase")
+  def MatchCaseClass(implicit ctx: Context): ClassSymbol = MatchCaseType.symbol.asClass
 
   lazy val NotType: TypeRef = ctx.requiredClassRef("scala.implicits.Not")
   def NotClass(implicit ctx: Context): ClassSymbol = NotType.symbol.asClass
@@ -928,6 +934,23 @@ class Definitions {
     def unapply(tp: Type)(implicit ctx: Context): Option[Type] = tp.dealias match {
       case AppliedType(at, arg :: Nil) if at isRef ArrayType.symbol => Some(arg)
       case _ => None
+    }
+  }
+
+  object MatchCase {
+    def apply(pat: Type, body: Type)(implicit ctx: Context): Type =
+      MatchCaseType.appliedTo(pat, body)
+    def unapply(tp: Type)(implicit ctx: Context): Option[(Type, Type)] = tp match {
+      case AppliedType(tycon, pat :: body :: Nil) if tycon.isRef(MatchCaseClass) =>
+        Some((pat, body))
+      case _ =>
+        None
+    }
+    def isInstance(tp: Type)(implicit ctx: Context): Boolean = tp match {
+      case AppliedType(tycon: TypeRef, _) =>
+        tycon.name == tpnme.MatchCase && // necessary pre-filter to avoid forcing symbols
+        tycon.isRef(MatchCaseClass)
+      case _ => false
     }
   }
 
@@ -1367,13 +1390,6 @@ class Definitions {
       // Enter all symbols from the scalaShadowing package in the scala package
       for (m <- ScalaShadowingPackageClass.info.decls)
         ScalaPackageClass.enter(m)
-
-      // Temporary measure, as long as we do not read these classes from Tasty.
-      // Scala-2 classes don't have NoInits set even if they are pure. We override this
-      // for Product and Serializable so that case classes can be pure. A full solution
-      // requires that we read all Scala code from Tasty.
-      ProductClass.setFlag(NoInits)
-      SerializableClass.setFlag(NoInits)
 
       // force initialization of every symbol that is synthesized or hijacked by the compiler
       val forced = syntheticCoreClasses ++ syntheticCoreMethods ++ ScalaValueClasses()

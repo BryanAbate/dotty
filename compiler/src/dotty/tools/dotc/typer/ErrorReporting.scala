@@ -16,14 +16,14 @@ object ErrorReporting {
 
   import tpd._
 
-  def errorTree(tree: untpd.Tree, msg: => Message, pos: SourcePosition)(implicit ctx: Context): tpd.Tree =
-    tree.withType(errorType(msg, pos))
+  def errorTree(tree: untpd.Tree, msg: => Message, pos: SourcePosition, sticky: Boolean = false)(implicit ctx: Context): tpd.Tree =
+    tree.withType(errorType(msg, pos, sticky))
 
   def errorTree(tree: untpd.Tree, msg: => Message)(implicit ctx: Context): tpd.Tree =
     errorTree(tree, msg, tree.sourcePos)
 
-  def errorType(msg: => Message, pos: SourcePosition)(implicit ctx: Context): ErrorType = {
-    ctx.error(msg, pos)
+  def errorType(msg: => Message, pos: SourcePosition, sticky: Boolean = false)(implicit ctx: Context): ErrorType = {
+    ctx.error(msg, pos, sticky)
     ErrorType(msg)
   }
 
@@ -47,7 +47,7 @@ object ErrorReporting {
           case _: WildcardType | _: IgnoredProto => ""
           case tp => em" and expected result type $tp"
         }
-        em"arguments (${tp.typedArgs.tpes}%, %)$result"
+        em"arguments (${tp.unforcedTypedArgs.tpes}%, %)$result"
       case _ =>
         em"expected type $tp"
     }

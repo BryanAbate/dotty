@@ -40,28 +40,28 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
 
     object ChildTraverser extends TreeTraverser {
       var children: List[Tree] = Nil
-      var childrenType: List[TypeOrBoundsTree] = Nil
-      override def traverseTree(tree: Tree)(implicit ctx: Context): Unit =
-        children = tree :: children
+      var childrenType: List[Tree /*TypeTree | TypeBoundsTree*/] = Nil
+      override def traverseTree(tree: Tree)(implicit ctx: Context): Unit = tree match {
+        case IsTypeTree(tree) =>
+          traverseTypeTree(tree)
+        case IsTypeBoundsTree(tree) =>
+          traverseTypeTree(tree)
+        case _ => children = tree :: children
+      }
       override def traversePattern(pattern: Pattern)(
           implicit ctx: Context): Unit = ()
-      override def traverseTypeTree(tree: TypeOrBoundsTree)(
+      def traverseTypeTree(tree: Tree /*TypeTree | TypeBoundsTree*/)(
           implicit ctx: Context): Unit =
           childrenType = tree :: childrenType
-      override def traverseCaseDef(tree: CaseDef)(implicit ctx: Context): Unit =
-        ()
-      override def traverseTypeCaseDef(tree: TypeCaseDef)(
-          implicit ctx: Context): Unit =
-        ()
 
       def getChildren(tree: Tree)(implicit ctx: Context): List[Tree] = {
         children = Nil
         traverseTreeChildren(tree)(ctx)
         return children
       }
-      def getChildrenType(tree: TypeOrBoundsTree)(implicit ctx: Context): List[TypeOrBoundsTree] = {
+      def getChildrenType(tree: Tree /*TypeTree | TypeBoundsTree*/)(implicit ctx: Context): List[Tree /*TypeTree | TypeBoundsTree*/] = {
         childrenType = Nil
-        traverseTypeTreeChildren(tree)(ctx)
+        traverseTreeChildren(tree)(ctx)
         return childrenType
       }
     }
@@ -94,19 +94,7 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
         }
       }
 
-      implicit class TermOrTypeTreeExtender(tree: TermOrTypeTree) {
-        def pos: Position = tree match {
-          case IsTerm(t) => t.pos
-          case IsTypeTree(t) => t.pos
-        }
-
-        def symbol: Symbol = tree match {
-          case IsTerm(t) => t.symbol
-          case IsTypeTree(t) => t.symbol
-        }
-      }
-
-      implicit class TypeOrBoundsTreeExtender(tree: TypeOrBoundsTree) {
+      implicit class TypeOrBoundsTreeExtender(tree: Tree /*TypeTree | TypeBoundsTree*/) {
         def typetree: TypeTree = tree match {
           case IsTypeTree(t) => t
         }
@@ -146,31 +134,31 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
 
 
         def isClass: Boolean = symbol match {
-          case IsClassSymbol(_) => true
+          case IsClassDefSymbol(_) => true
           case _                => false
         }
 
         def isTypeParameter: Boolean = symbol.isParameter && symbol.isType
 
         def isType: Boolean = symbol match {
-          case IsTypeSymbol(_) => true
+          case IsTypeDefSymbol(_) => true
           case _               => false
         }
 
         def isTerm: Boolean = !symbol.isType
 
         def isMethod: Boolean = symbol match {
-          case IsDefSymbol(_) => true
+          case IsDefDefSymbol(_) => true
           case _              => false
         }
 
         def isVal: Boolean = symbol match {
-          case IsValSymbol(_) => true
+          case IsValDefSymbol(_) => true
           case _              => false
         }
 
         def isPackage: Boolean = symbol match {
-          case IsPackageSymbol(_) => true
+          case IsPackageDefSymbol(_) => true
           case _                  => false
         }
 
@@ -271,12 +259,12 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
         def isSyntheticValueClassCompanion(implicit ctx: Context): Boolean = {
           if (symbol.isClass) {
             if (symbol.flags.is(Flags.Object)) {
-              symbol.asClass.moduleClass.fold(false)(c =>
+              symbol.asClassDef.moduleClass.fold(false)(c =>
                 c.isSyntheticValueClassCompanion)
             } else {
               symbol.flags.is(Flags.ModuleClass) &&
               symbol.flags.is(Flags.Synthetic) &&
-              symbol.asClass.methods.isEmpty
+              symbol.asClassDef.methods.isEmpty
             }
           } else {
             false
@@ -304,7 +292,7 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
         }
         def isSyntheticJavaModule(implicit ctx: Context): Boolean = {
           val resolved = symbol match {
-          case IsClassSymbol(c) => resolveClass(c)
+          case IsClassDefSymbol(c) => resolveClass(c)
           case _ => symbol
           }
           !resolved.flags.is(Flags.Package)  && resolved.flags.is(Flags.JavaDefined)  && resolved.flags.is(Flags.Object)
@@ -321,7 +309,7 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
         }
         def isStaticMember(implicit ctx: Context): Boolean =
           symbol.exists &&
-            (symbol.flags.is(Flags.Static)  || symbol.owner.flags.is(Flags.ImplClass)  ||
+            (symbol.flags.is(Flags.Static)  ||
               /*symbol.annots.find(_ == ctx.definitions.ScalaStaticAnnot)*/ false)
 
         def isStaticConstructor(implicit ctx: Context): Boolean = {
@@ -362,7 +350,7 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
         }
       }
 
-      def resolveClass(symbol: ClassSymbol): Symbol =
+      def resolveClass(symbol: ClassDefSymbol): Symbol =
         (symbol.companionClass, symbol.companionModule) match {
           case (Some(c), _)                               => c
           case (_, Some(module)) if symbol.flags.is(Flags.Object) => module
@@ -371,9 +359,9 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
 
       def disimbiguate(symbolPath: String, symbol: Symbol): String = {
         try {
-          val symbolcl = resolveClass(symbol.owner.asClass)
+          val symbolcl = resolveClass(symbol.owner.asClassDef)
           symbolcl match {
-            case IsClassSymbol(classsymbol) => {
+            case IsClassDefSymbol(classsymbol) => {
               val methods = classsymbol.method(symbol.name)
               val (methods_count, method_pos) =
                 methods.foldLeft((0, -1))((x: Tuple2[Int, Int], m: Symbol) => {
@@ -404,7 +392,7 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
           ""
         } else {
           val rsymbol = symbol match {
-            case IsClassSymbol(c) => resolveClass(c)
+            case IsClassDefSymbol(c) => resolveClass(c)
             case _ => symbol
           }
           val previous_symbol =
@@ -418,7 +406,7 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
               iterateParent(rsymbol.owner)
 
 
-          val isdef = rsymbol match {case IsDefSymbol(_) => true case _ => false}
+          val isdef = rsymbol match {case IsDefDefSymbol(_) => true case _ => false}
           val symbolName = if (isMutableAssignement) rsymbol.trueName + "_=" else rsymbol.trueName
           val next_atom =
             if (rsymbol.isPackage) {
@@ -643,22 +631,22 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
         })
       }
 
-      override def traverseTypeTree(tree: TypeOrBoundsTree)(
+      def traverseTypeTree(tree: Tree /*TypeTree | TypeBoundsTree*/)(
           implicit ctx: Context): Unit = {
         tree match {
-          case TypeTree.Ident(_) => {
+          case TypeTree.TypeIdent(_) => {
             val typetree = tree.typetree
             addOccurenceTypeTree(typetree,
                                  s.SymbolOccurrence.Role.REFERENCE,
                                  createRange(typetree.pos))
           }
-          case TypeTree.Select(qualifier, _) => {
+          case TypeTree.TypeSelect(qualifier, _) => {
             val typetree = tree.typetree
             val range = rangeSelect(typetree.symbol.trueName, typetree.pos)
             addOccurenceTypeTree(typetree,
                                  s.SymbolOccurrence.Role.REFERENCE,
                                  range)
-            super.traverseTypeTree(typetree)
+            super.traverseTree(typetree)
           }
 
           case TypeTree.Projection(qualifier, x) => {
@@ -667,7 +655,7 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
               addOccurenceTypeTree(typetree,
                                   s.SymbolOccurrence.Role.REFERENCE,
                                   range)
-              super.traverseTypeTree(typetree)
+              super.traverseTree(typetree)
           }
 
           case TypeTree.Inferred() => {
@@ -703,7 +691,7 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
           }
 
           case _ => {
-            super.traverseTypeTree(tree)
+            super.traverseTree(tree)
           }
         }
       }
@@ -804,10 +792,7 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
             fittedInitClassRange = None
 
             // we add the parents to the symbol list
-            parents.foreach(_ match {
-              case IsTypeTree(t) => traverseTypeTree(t)
-              case IsTerm(t) => traverseTree(t)
-            })
+            parents.foreach(traverseTree)
 
             selfopt match {
               case Some(vdef @ ValDef(name, type_, _)) => {
@@ -822,7 +807,7 @@ class SemanticdbConsumer(sourceFilePath: java.nio.file.Path) extends TastyConsum
                   // 2) Find the first '{'
                   // 3) Iterate until the character we are seeing is a letter
                   val startPosSearch: Int = parents.foldLeft(tree.pos.end)(
-                    (old: Int, ct: TermOrTypeTree) =>
+                    (old: Int, ct: Tree) =>
                       ct match {
                         case IsTerm(t) if t.pos.end < old => t.pos.end
                         case _                                  => old

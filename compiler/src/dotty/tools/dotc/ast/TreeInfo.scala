@@ -106,6 +106,13 @@ trait TreeInfo[T >: Untyped <: Type] { self: Trees.Instance[T] =>
     case _ => Nil
   }
 
+  /** Is tree a path? */
+  def isPath(tree: Tree): Boolean = unsplice(tree) match {
+    case Ident(_) | This(_) | Super(_, _) => true
+    case Select(qual, _) => isPath(qual)
+    case _ => false
+  }
+
   /** Is tree a self constructor call this(...)? I.e. a call to a constructor of the
    *  same object?
    */
@@ -824,8 +831,11 @@ trait TypedTreeInfo extends TreeInfo[Type] { self: Trees.Instance[Type] =>
      *  The result can be the contents of a term or type splice, which
      *  will return a term or type tree respectively.
      */
-    def unapply(tree: tpd.Select)(implicit ctx: Context): Option[tpd.Tree] =
-      if (tree.symbol.isSplice) Some(tree.qualifier) else None
+    def unapply(tree: tpd.Tree)(implicit ctx: Context): Option[tpd.Tree] = tree match {
+      case tree: tpd.Apply if tree.symbol.isSplice => Some(tree.args.head)
+      case tree: tpd.Select if tree.symbol.isSplice => Some(tree.qualifier)
+      case _ => None
+    }
   }
 }
 

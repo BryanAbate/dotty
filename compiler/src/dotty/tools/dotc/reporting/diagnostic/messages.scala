@@ -35,6 +35,15 @@ object messages {
     pos: SourcePosition
   ) extends MessageContainer(msgFn, pos, ERROR)
 
+  /** A sticky error is an error that should not be hidden by backtracking and
+   *  trying some alternative path. Typcially, errors issued after catching
+   *  a TypeError exception are sticky.
+   */
+  class StickyError(
+    msgFn: => Message,
+    pos: SourcePosition
+  ) extends Error(msgFn, pos)
+
   class Warning(
     msgFn: => Message,
     pos: SourcePosition
@@ -195,21 +204,16 @@ object messages {
         else
           ""
 
+      val inferred =
+        if (pt == WildcardType) ""
+        else i"\nWhat I could infer was: $pt"
+
       i"""Missing parameter type
          |
-         |The argument types of an anonymous function must be fully known. (SLS 8.5)
-         |Expected type: $pt
-         |Missing type for parameter ${param.name}$ofFun"""
+         |I could not infer the type of the parameter ${param.name}$ofFun.$inferred"""
     }
 
-    val explanation: String =
-      hl"""|Anonymous functions must define a type. For example, if you define a function like this one:
-           |
-           |${"val f = { case x: Int => x + 1 }"}
-           |
-           |Make sure you give it a type of what you expect to match and help the type inference system:
-           |
-           |${"val f: Any => Int = { case x: Int => x + 1 }"} """
+    val explanation: String = ""
   }
 
   case class WildcardOnTypeArgumentNotAllowedOnNew()(implicit ctx: Context)

@@ -13,6 +13,7 @@ import core.Mode
 import dotty.tools.dotc.core.Symbols.{Symbol, NoSymbol}
 import diagnostic.messages._
 import diagnostic._
+import ast.{tpd, Trees}
 import Message._
 
 object Reporter {
@@ -89,21 +90,27 @@ trait Reporting { this: Context =>
   }
 
   def warning(msg: => Message, pos: SourcePosition = NoSourcePosition): Unit =
-    reportWarning(new Warning(msg, pos))
+    reportWarning(new Warning(msg, addInlineds(pos)))
 
-  def strictWarning(msg: => Message, pos: SourcePosition = NoSourcePosition): Unit =
-    if (this.settings.strict.value) error(msg, pos)
-    else reportWarning(new ExtendMessage(() => msg)(_ + "\n(This would be an error under strict mode)").warning(pos))
+  def strictWarning(msg: => Message, pos: SourcePosition = NoSourcePosition): Unit = {
+    val fullPos = addInlineds(pos)
+    if (this.settings.strict.value) error(msg, fullPos)
+    else reportWarning(
+      new ExtendMessage(() => msg)(_ + "\n(This would be an error under strict mode)")
+        .warning(fullPos))
+  }
 
-  def error(msg: => Message, pos: SourcePosition = NoSourcePosition): Unit =
-    reporter.report(new Error(msg, pos))
+  def error(msg: => Message, pos: SourcePosition = NoSourcePosition, sticky: Boolean = false): Unit = {
+    val fullPos = addInlineds(pos)
+    reporter.report(if (sticky) new StickyError(msg, fullPos) else new Error(msg, fullPos))
+  }
 
   def errorOrMigrationWarning(msg: => Message, pos: SourcePosition = NoSourcePosition): Unit =
     if (ctx.scala2Mode) migrationWarning(msg, pos) else error(msg, pos)
 
   def restrictionError(msg: => Message, pos: SourcePosition = NoSourcePosition): Unit =
     reporter.report {
-      new ExtendMessage(() => msg)(m => s"Implementation restriction: $m").error(pos)
+      new ExtendMessage(() => msg)(m => s"Implementation restriction: $m").error(addInlineds(pos))
     }
 
   def incompleteInputError(msg: => Message, pos: SourcePosition = NoSourcePosition)(implicit ctx: Context): Unit =
@@ -135,6 +142,14 @@ trait Reporting { this: Context =>
 
   def debugwarn(msg: => String, pos: SourcePosition = NoSourcePosition): Unit =
     if (this.settings.Ydebug.value) warning(msg, pos)
+
+  private def addInlineds(pos: SourcePosition)(implicit ctx: Context) = {
+    def recur(pos: SourcePosition, inlineds: List[Trees.Tree[_]]): SourcePosition = inlineds match {
+      case inlined :: inlineds1 => pos.withOuter(recur(inlined.sourcePos, inlineds1))
+      case Nil => pos
+    }
+    recur(pos, tpd.enclosingInlineds)
+  }
 }
 
 /**
@@ -171,12 +186,26 @@ abstract class Reporter extends interfaces.ReporterResult {
 
   private[this] var _errorCount = 0
   private[this] var _warningCount = 0
+
+  /** The number of errors reported by this reporter (ignoring outer reporters) */
   def errorCount: Int = _errorCount
+
+  /** The number of warnings reported by this reporter (ignoring outer reporters) */
   def warningCount: Int = _warningCount
+
+  /** Have errors been reported by this reporter (ignoring outer reporters)? */
   def hasErrors: Boolean = errorCount > 0
+
+  /** Have warnings been reported by this reporter (ignoring outer reporters)? */
   def hasWarnings: Boolean = warningCount > 0
+
   private[this] var errors: List[Error] = Nil
+
+  /** All errors reported by this reporter (ignoring outer reporters) */
   def allErrors: List[Error] = errors
+
+  /** Were sticky errors reported? Overridden in StoreReporter. */
+  def hasStickyErrors: Boolean = false
 
   /** Have errors been reported by this reporter, or in the
    *  case where this is a StoreReporter, by an outer reporter?

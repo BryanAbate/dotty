@@ -80,7 +80,7 @@ object Parsers {
      *  If `t` does not have a span yet, set its span to the given one.
      */
     def atSpan[T <: Positioned](span: Span)(t: T): T =
-      if (t.span.isSourceDerived) t else t.withSpan(span)
+      if (t.span.isSourceDerived) t else t.withSpan(span.union(t.span))
 
     def atSpan[T <: Positioned](start: Offset, point: Offset, end: Offset)(t: T): T =
       atSpan(Span(start, end, point))(t)
@@ -368,9 +368,9 @@ object Parsers {
     }
 
     private[this] var inEnum = false
-    private def withinEnum[T](isEnum: Boolean)(body: => T): T = {
+    private def withinEnum[T](body: => T): T = {
       val saved = inEnum
-      inEnum = isEnum
+      inEnum = true
       try body
       finally inEnum = saved
     }
@@ -908,7 +908,9 @@ object Parsers {
         case FORSOME => syntaxError(ExistentialTypesNoLongerSupported()); t
         case _ =>
           if (imods.is(Implicit) && !t.isInstanceOf[FunctionWithMods])
-            syntaxError("Types with implicit keyword can only be function types", implicitKwPos(start))
+            syntaxError("Types with implicit keyword can only be function types `implicit (...) => ...`", implicitKwPos(start))
+          if (imods.is(Erased) && !t.isInstanceOf[FunctionWithMods])
+            syntaxError("Types with erased keyword can only be function types `erased (...) => ...`", implicitKwPos(start))
           t
       }
     }
@@ -1586,7 +1588,7 @@ object Parsers {
         case parent :: Nil if in.token != LBRACE =>
           reposition(if (parent.isType) ensureApplied(wrapNew(parent)) else parent)
         case _ =>
-          New(reposition(templateBodyOpt(emptyConstructor, parents, Nil, isEnum = false)))
+          New(reposition(templateBodyOpt(emptyConstructor, parents, Nil)))
       }
     }
 
@@ -2222,9 +2224,9 @@ object Parsers {
      */
     def importClause(): List[Tree] = {
       val offset = accept(IMPORT)
-      val impliedOnly = in.token == IMPLIED
-      if (impliedOnly) in.nextToken()
-      commaSeparated(importExpr(impliedOnly)) match {
+      val importImplied = in.token == IMPLIED
+      if (importImplied) in.nextToken()
+      commaSeparated(importExpr(importImplied)) match {
         case t :: rest =>
           // The first import should start at the start offset of the keyword.
           val firstPos =
@@ -2237,11 +2239,11 @@ object Parsers {
 
     /**  ImportExpr ::= StableId `.' (id | `_' | ImportSelectors)
      */
-    def importExpr(impliedOnly: Boolean): () => Import = {
+    def importExpr(importImplied: Boolean): () => Import = {
 
       val handleImport: Tree => Tree = { tree: Tree =>
-        if (in.token == USCORE) Import(impliedOnly, tree, importSelector() :: Nil)
-        else if (in.token == LBRACE) Import(impliedOnly, tree, inBraces(importSelectors()))
+        if (in.token == USCORE) Import(importImplied, tree, importSelector() :: Nil)
+        else if (in.token == LBRACE) Import(importImplied, tree, inBraces(importSelectors()))
         else tree
       }
 
@@ -2250,10 +2252,10 @@ object Parsers {
           imp
         case sel @ Select(qual, name) =>
           val selector = atSpan(pointOffset(sel)) { Ident(name) }
-          cpy.Import(sel)(impliedOnly, qual, selector :: Nil)
+          cpy.Import(sel)(importImplied, qual, selector :: Nil)
         case t =>
           accept(DOT)
-          Import(impliedOnly, t, Ident(nme.WILDCARD) :: Nil)
+          Import(importImplied, t, Ident(nme.WILDCARD) :: Nil)
       }
     }
 
@@ -2555,12 +2557,7 @@ object Parsers {
       val modName = ident()
       val clsName = modName.toTypeName
       val constr = classConstr()
-      val templ = templateOpt(constr, isEnum = true)
-      templ match {
-        case Template(_, _, _, List(EmptyTree)) =>
-          syntaxError("enum body should not be empty.", start)
-        case _ =>
-      }
+      val templ = template(constr, isEnum = true)
       finalizeDef(TypeDef(clsName, templ), addMod(mods, enumMod), start)
     }
 
@@ -2633,7 +2630,7 @@ object Parsers {
           val tparams1 = tparams.map(tparam => tparam.withMods(tparam.mods | PrivateLocal))
           val vparamss1 = vparamss.map(_.map(vparam =>
             vparam.withMods(vparam.mods &~ Param | ParamAccessor | PrivateLocal)))
-          val templ = templateBodyOpt(makeConstructor(tparams1, vparamss1), parents, Nil, isEnum = false)
+          val templ = templateBodyOpt(makeConstructor(tparams1, vparamss1), parents, Nil)
           if (tparams.isEmpty && vparamss.isEmpty) ModuleDef(name, templ)
           else TypeDef(name.toTypeName, templ)
         }
@@ -2696,26 +2693,28 @@ object Parsers {
     def template(constr: DefDef, isEnum: Boolean = false): Template = {
       val (parents, derived) = inheritClauses()
       newLineOptWhenFollowedBy(LBRACE)
-      if (isEnum && in.token != LBRACE)
-        syntaxErrorOrIncomplete(ExpectedTokenButFound(LBRACE, in.token))
-      templateBodyOpt(constr, parents, derived, isEnum)
+      if (isEnum) {
+        val (self, stats) = withinEnum(templateBody())
+        Template(constr, parents, derived, self, stats)
+      }
+      else templateBodyOpt(constr, parents, derived)
     }
 
     /** TemplateOpt = [Template]
      */
-    def templateOpt(constr: DefDef, isEnum: Boolean = false): Template = {
+    def templateOpt(constr: DefDef): Template = {
       newLineOptWhenFollowedBy(LBRACE)
       if (in.token == EXTENDS || isIdent(nme.derives) || in.token == LBRACE)
-        template(constr, isEnum)
+        template(constr)
       else
         Template(constr, Nil, Nil, EmptyValDef, Nil)
     }
 
     /** TemplateBody ::= [nl] `{' TemplateStatSeq `}'
      */
-    def templateBodyOpt(constr: DefDef, parents: List[Tree], derived: List[Tree], isEnum: Boolean): Template = {
+    def templateBodyOpt(constr: DefDef, parents: List[Tree], derived: List[Tree]): Template = {
       val (self, stats) =
-        if (in.token == LBRACE) withinEnum(isEnum)(templateBody()) else (EmptyValDef, Nil)
+        if (in.token == LBRACE) templateBody() else (EmptyValDef, Nil)
       Template(constr, parents, derived, self, stats)
     }
 

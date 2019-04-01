@@ -67,8 +67,7 @@ class PlainPrinter(_ctx: Context) extends Printer {
     else tp
 
   private def sameBound(lo: Type, hi: Type): Boolean =
-    try ctx.typeComparer.isSameTypeWhenFrozen(lo, hi)
-    catch { case NonFatal(ex) => false }
+    try lo frozen_=:= hi catch { case NonFatal(ex) => false }
 
   private def homogenizeArg(tp: Type) = tp match {
     case TypeBounds(lo, hi) if homogenizedView && sameBound(lo, hi) => homogenize(hi)
@@ -167,7 +166,10 @@ class PlainPrinter(_ctx: Context) extends Printer {
         changePrec(OrTypePrec) { toText(tp1) ~ " | " ~ atPrec(OrTypePrec + 1) { toText(tp2) } }
       case MatchType(bound, scrutinee, cases) =>
         changePrec(GlobalPrec) {
-          def caseText(tp: Type): Text = "case " ~ toText(tp)
+          def caseText(tp: Type): Text = tp match {
+            case defn.MatchCase(pat, body) => "case " ~ toText(pat) ~ " => " ~ toText(body)
+            case _ => "case " ~ toText(tp)
+          }
           def casesText = Text(cases.map(caseText), "\n")
             atPrec(InfixPrec) { toText(scrutinee) } ~
             keywordStr(" match ") ~ "{" ~ casesText ~ "}" ~
@@ -368,7 +370,6 @@ class PlainPrinter(_ctx: Context) extends Printer {
     else if (sym.isAnonymousClass) "anonymous class"
     else if (flags is ModuleClass) "module class"
     else if (flags is ModuleVal) "module"
-    else if (flags is ImplClass) "implementation class"
     else if (flags is Trait) "trait"
     else if (sym.isClass) "class"
     else if (sym.isType) "type"

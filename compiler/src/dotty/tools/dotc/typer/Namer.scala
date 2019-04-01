@@ -815,7 +815,6 @@ class Namer { typer: Typer =>
       case original: untpd.DefDef if sym.isInlineMethod =>
         PrepareInlineable.registerInlineInfo(
             sym,
-            original.rhs,
             implicit ctx => typedAheadExpr(original).asInstanceOf[tpd.DefDef].rhs
           )(localContext(sym))
       case _ =>
@@ -1040,7 +1039,7 @@ class Namer { typer: Typer =>
       val finalSelfInfo: TypeOrSymbol =
         if (cls.isOpaqueCompanion) {
           // The self type of an opaque companion is refined with the type-alias of the original opaque type
-          def refineOpaqueCompanionSelfType(mt: Type, stats: List[Tree]): RefinedType = (stats: @unchecked) match {
+          def refineOpaqueCompanionSelfType(mt: Type, stats: List[Tree]): Type = (stats: @unchecked) match {
             case (td @ TypeDef(localName, rhs)) :: _
             if td.mods.is(SyntheticOpaque) && localName == name.stripModuleClassSuffix =>
               // create a context owned by the current opaque helper symbol,
@@ -1054,6 +1053,8 @@ class Namer { typer: Typer =>
               RefinedType(mt, localName, bounds)
             case _ :: stats1 =>
               refineOpaqueCompanionSelfType(mt, stats1)
+            case _ =>
+              mt // can happen for malformed inputs.
           }
           selfInfo match {
             case self: Type =>
@@ -1077,7 +1078,7 @@ class Namer { typer: Typer =>
   }
 
   /** Typecheck `tree` during completion using `typed`, and remember result in TypedAhead map */
-  def typedAheadImpl(tree: Tree, typed: untpd.Tree => tpd.Tree)(implicit ctx: Context): tpd.Tree = {
+  def typedAhead(tree: Tree, typed: untpd.Tree => tpd.Tree)(implicit ctx: Context): tpd.Tree = {
     val xtree = expanded(tree)
     xtree.getAttachment(TypedAhead) match {
       case Some(ttree) => ttree
@@ -1089,10 +1090,10 @@ class Namer { typer: Typer =>
   }
 
   def typedAheadType(tree: Tree, pt: Type = WildcardType)(implicit ctx: Context): tpd.Tree =
-    typedAheadImpl(tree, typer.typed(_, pt)(ctx retractMode Mode.PatternOrTypeBits addMode Mode.Type))
+    typedAhead(tree, typer.typed(_, pt)(ctx retractMode Mode.PatternOrTypeBits addMode Mode.Type))
 
   def typedAheadExpr(tree: Tree, pt: Type = WildcardType)(implicit ctx: Context): tpd.Tree =
-    typedAheadImpl(tree, typer.typed(_, pt)(ctx retractMode Mode.PatternOrTypeBits))
+    typedAhead(tree, typer.typed(_, pt)(ctx retractMode Mode.PatternOrTypeBits))
 
   def typedAheadAnnotation(tree: Tree)(implicit ctx: Context): tpd.Tree =
     typedAheadExpr(tree, defn.AnnotationType)

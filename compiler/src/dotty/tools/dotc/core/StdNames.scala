@@ -128,7 +128,6 @@ object StdNames {
     val EMPTY_PACKAGE: N              = "<empty>"
     val EXCEPTION_RESULT_PREFIX: N    = "exceptionResult"
     val EXPAND_SEPARATOR: N           = str.EXPAND_SEPARATOR
-    val IMPL_CLASS_SUFFIX: N          = "$class"
     val IMPORT: N                     = "<import>"
     val MODULE_SUFFIX: N              = str.MODULE_SUFFIX
     val OPS_PACKAGE: N                = "<special-ops>"
@@ -198,6 +197,7 @@ object StdNames {
     final val Nothing: N             = "Nothing"
     final val Null: N                = "Null"
     final val Object: N              = "Object"
+    final val Product: N             = "Product"
     final val PartialFunction: N     = "PartialFunction"
     final val PrefixType: N          = "PrefixType"
     final val S: N                   = "S"
@@ -338,6 +338,7 @@ object StdNames {
     val Literal: N              = "Literal"
     val LiteralAnnotArg: N      = "LiteralAnnotArg"
     val longHash: N             = "longHash"
+    val MatchCase: N            = "MatchCase"
     val Modifiers: N            = "Modifiers"
     val NestedAnnotArg: N       = "NestedAnnotArg"
     val NoFlags: N              = "NoFlags"

@@ -513,7 +513,7 @@ class TreeUnpickler(reader: TastyReader,
         def complete(denot: SymDenotation)(implicit ctx: Context) =
           denot.info = typeReader.readType()
       }
-      val sym = ctx.newSymbol(ctx.owner, name, EmptyFlags, completer, coord = coordAt(start))
+      val sym = ctx.newSymbol(ctx.owner, name, Flags.Case, completer, coord = coordAt(start))
       registerSym(start, sym)
       sym
     }
@@ -851,8 +851,6 @@ class TreeUnpickler(reader: TastyReader,
         sym.info = ta.avoidPrivateLeaks(sym, tree.sourcePos)
       }
 
-      sym.defTree = tree
-
       if (ctx.mode.is(Mode.ReadComments)) {
         assert(ctx.docCtx.isDefined, "Mode is `ReadComments`, but no `docCtx` is set.")
         commentUnpicklerOpt.foreach { commentUnpickler =>
@@ -862,7 +860,7 @@ class TreeUnpickler(reader: TastyReader,
         }
       }
 
-      tree
+      tree.setDefTree
     }
 
     private def readTemplate(implicit ctx: Context): Template = {
@@ -956,10 +954,10 @@ class TreeUnpickler(reader: TastyReader,
       assert(sourcePathAt(start).isEmpty)
       readByte()
       readEnd()
-      val impliedOnly = nextByte == IMPLIED
-      if (impliedOnly) readByte()
+      val importImplied = nextByte == IMPLIED
+      if (importImplied) readByte()
       val expr = readTerm()
-      setSpan(start, Import(impliedOnly, expr, readSelectors()))
+      setSpan(start, Import(importImplied, expr, readSelectors()))
     }
 
     def readSelectors()(implicit ctx: Context): List[untpd.Tree] = nextByte match {

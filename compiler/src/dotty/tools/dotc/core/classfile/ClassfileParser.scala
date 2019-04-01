@@ -99,8 +99,6 @@ class ClassfileParser(
       throw new IOException(s"class file '${in.file}' has wrong magic number 0x${toHexString(magic)}, should be 0x${toHexString(JAVA_MAGIC)}")
     val minorVersion = in.nextChar.toInt
     val majorVersion = in.nextChar.toInt
-    if (majorVersion >= JAVA8_MAJOR_VERSION)
-      Scala2UnpicklingMode |= Mode.Java8Unpickling
     if ((majorVersion < JAVA_MAJOR_VERSION) ||
         ((majorVersion == JAVA_MAJOR_VERSION) &&
          (minorVersion < JAVA_MINOR_VERSION)))
@@ -806,7 +804,7 @@ class ClassfileParser(
               ctx.error("Could not load TASTY from .tasty for virtual file " + classfile)
               Array.empty
             case Some(jar: ZipArchive) => // We are in a jar
-              val cl = new URLClassLoader(Array(jar.jpath.toUri.toURL))
+              val cl = new URLClassLoader(Array(jar.jpath.toUri.toURL), /*parent =*/ null)
               val path = classfile.path.stripSuffix(".class") + ".tasty"
               val stream = cl.getResourceAsStream(path)
               if (stream != null) {

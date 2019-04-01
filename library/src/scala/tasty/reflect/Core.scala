@@ -8,54 +8,54 @@ package scala.tasty.reflect
  *  +- Tree -+- PackageClause
  *           +- Import
  *           +- Statement -+- Definition --+- PackageDef
- *                         |               +- ClassDef
- *                         |               +- TypeDef
- *                         |               +- DefDef
- *                         |               +- ValDef
- *                         |
- *                         +- Term --------+- Ref -+- Ident
- *                                         |       +- Select
- *                                         |
- *                                         +- Literal
- *                                         +- This
- *                                         +- New
- *                                         +- NamedArg
- *                                         +- Apply
- *                                         +- TypeApply
- *                                         +- Super
- *                                         +- Typed
- *                                         +- Assign
- *                                         +- Block
- *                                         +- Lambda
- *                                         +- If
- *                                         +- Match
- *                                         +- Try
- *                                         +- Return
- *                                         +- Repeated
- *                                         +- Inlined
- *                                         +- SelectOuter
- *                                         +- While
- *
- *
- *                         +- TypeTree ----+- Inferred
- *                         |               +- Ident
- *                         |               +- Select
- *                         |               +- Project
- *                         |               +- Singleton
- *  +- TypeOrBoundsTree ---+               +- Refined
- *                         |               +- Applied
- *                         |               +- Annotated
- *                         |               +- MatchType
- *                         |               +- ByName
- *                         |               +- LambdaTypeTree
- *                         |               +- TypeBind
- *                         |               +- TypeBlock
- *                         |
- *                         +- TypeBoundsTree
- *                         +- WildcardTypeTree
- *
- *  +- CaseDef
- *  +- TypeCaseDef
+ *           |             |               +- ClassDef
+ *           |             |               +- TypeDef
+ *           |             |               +- DefDef
+ *           |             |               +- ValDef
+ *           |             |
+ *           |             +- Term --------+- Ref -+- Ident
+ *           |                             |       +- Select
+ *           |                             |
+ *           |                             +- Literal
+ *           |                             +- This
+ *           |                             +- New
+ *           |                             +- NamedArg
+ *           |                             +- Apply
+ *           |                             +- TypeApply
+ *           |                             +- Super
+ *           |                             +- Typed
+ *           |                             +- Assign
+ *           |                             +- Block
+ *           |                             +- Lambda
+ *           |                             +- If
+ *           |                             +- Match
+ *           |                             +- ImplicitMatch
+ *           |                             +- Try
+ *           |                             +- Return
+ *           |                             +- Repeated
+ *           |                             +- Inlined
+ *           |                             +- SelectOuter
+ *           |                             +- While
+ *           |
+ *           |
+ *           +- TypeTree ----+- Inferred
+ *           |               +- TypeIdent
+ *           |               +- TypeSelect
+ *           |               +- Project
+ *           |               +- Singleton
+ *           |               +- Refined
+ *           |               +- Applied
+ *           |               +- Annotated
+ *           |               +- MatchTypeTree
+ *           |               +- ByName
+ *           |               +- LambdaTypeTree
+ *           |               +- TypeBind
+ *           |               +- TypeBlock
+ *           |
+ *           +- TypeBoundsTree
+ *           +- WildcardTypeTree
+ *           +- CaseDef
+ *           +- TypeCaseDef
  *
  *  +- Pattern --+- Value
  *               +- Bind
@@ -101,18 +101,19 @@ package scala.tasty.reflect
  *
  *  +- Constant
  *
- *  +- Symbol --+- PackageSymbol
- *              +- ClassSymbol
- *              +- TypeSymbol
- *              +- DefSymbol
- *              +- ValSymbol
- *              +- BindSymbol
+ *  +- Symbol --+- PackageDefSymbol
+ *              |
+ *              +- TypeSymbol -+- ClassDefSymbol
+ *              |              +- TypeDefSymbol
+ *              |              +- TypeBindSymbol
+ *              |
+ *              +- TermSymbol -+- DefDefSymbol
+ *              |              +- ValDefSymbol
+ *              |              +- BindSymbol
+ *              |
  *              +- NoSymbol
  *
  *  +- Flags
- *
- *  Aliases:
- *   # TermOrTypeTree = Term | TypeTree
  *
  *  ```
  */
@@ -125,10 +126,6 @@ trait Core {
 
   /** Settings */
   type Settings = kernel.Settings
-
-  // TODO: When bootstrapped, remove and use `Term | TypeTree` type directly in other files
-  /** Workaround missing `|` types in Scala 2 to represent `Term | TypeTree` */
-  type TermOrTypeTree /* Term | TypeTree */ = kernel.TermOrTypeTree
 
   /** Tree representing code written in the source */
   type Tree = kernel.Tree
@@ -217,6 +214,9 @@ trait Core {
         /** Tree representing a pattern match `x match  { ... }` in the source code */
         type Match = kernel.Match
 
+        /** Tree representing a pattern match `implicit match { ... }` in the source code */
+        type ImplicitMatch = kernel.ImplicitMatch
+
         /** Tree representing a tyr catch `try x catch { ... } finally { ... }` in the source code */
         type Try = kernel.Try
 
@@ -236,6 +236,65 @@ trait Core {
         type While = kernel.While
 
       }
+
+      /** Type tree representing a type written in the source */
+      type TypeTree = kernel.TypeTree
+
+      /** Type trees representing a type written in the source */
+      val TypeTree: TypeTreeCoreModule
+
+      /** Type trees representing a type written in the source */
+      trait TypeTreeCoreModule {
+
+        /** Type tree representing an inferred type */
+        type Inferred = kernel.Inferred
+
+        /** Type tree representing a reference to definition with a given name */
+        type TypeIdent = kernel.TypeIdent
+
+        /** Type tree representing a selection of definition with a given name on a given term prefix */
+        type TypeSelect = kernel.TypeSelect
+
+        /** Type tree representing a selection of definition with a given name on a given type prefix */
+        type Projection = kernel.Projection
+
+        /** Type tree representing a singleton type */
+        type Singleton = kernel.Singleton
+
+        /** Type tree representing a type refinement */
+        type Refined = kernel.Refined
+
+        /** Type tree representing a type application */
+        type Applied = kernel.Applied
+
+        /** Type tree representing an annotated type */
+        type Annotated = kernel.Annotated
+
+        /** Type tree representing a type match */
+        type MatchTypeTree = kernel.MatchTypeTree
+
+        /** Type tree representing a by name parameter */
+        type ByName = kernel.ByName
+
+        /** Type tree representing a lambda abstraction type */
+        type LambdaTypeTree = kernel.LambdaTypeTree
+
+        /** Type tree representing a type binding */
+        type TypeBind = kernel.TypeBind
+
+        /** Type tree within a block with aliases `{ type U1 = ... ; T[U1, U2] }` */
+        type TypeBlock = kernel.TypeBlock
+
+      }
+
+      /** Type tree representing a type bound written in the source */
+      type TypeBoundsTree = kernel.TypeBoundsTree
+
+      /** Type tree representing wildcard type bounds written in the source.
+       *  The wildcard type `_` (for example in in `List[_]`) will be a type tree that
+       *  represents a type but has `TypeBound`a inside.
+       */
+      type WildcardTypeTree = kernel.WildcardTypeTree
 
   /** Branch of a pattern match or catch clause */
   type CaseDef = kernel.CaseDef
@@ -260,68 +319,6 @@ trait Core {
 
     /** Pattern representing a `x: Y` type test. */
     type TypeTest = kernel.TypeTest
-
-  /** Type tree representing a type or a bounds written in the source */
-  type TypeOrBoundsTree = kernel.TypeOrBoundsTree
-
-    /** Type tree representing a type written in the source */
-    type TypeTree = kernel.TypeTree
-
-    /** Type trees representing a type written in the source */
-    val TypeTree: TypeTreeCoreModule
-
-    /** Type trees representing a type written in the source */
-    trait TypeTreeCoreModule {
-
-      /** Type tree representing an inferred type */
-      type Inferred = kernel.TypeTree_Inferred
-
-      /** Type tree representing a reference to definition with a given name */
-      type Ident = kernel.TypeTree_Ident
-
-      /** Type tree representing a selection of definition with a given name on a given term prefix */
-      type Select = kernel.TypeTree_Select
-
-      /** Type tree representing a selection of definition with a given name on a given type prefix */
-      type Projection = kernel.TypeTree_Projection
-
-      /** Type tree representing a singleton type */
-      type Singleton = kernel.TypeTree_Singleton
-
-      /** Type tree representing a type refinement */
-      type Refined = kernel.TypeTree_Refined
-
-      /** Type tree representing a type application */
-      type Applied = kernel.TypeTree_Applied
-
-      /** Type tree representing an annotated type */
-      type Annotated = kernel.TypeTree_Annotated
-
-      /** Type tree representing a type match */
-      type MatchType = kernel.TypeTree_MatchType
-
-      /** Type tree representing a by name parameter */
-      type ByName = kernel.TypeTree_ByName
-
-      /** Type tree representing a lambda abstraction type */
-      type LambdaTypeTree = kernel.TypeTree_LambdaTypeTree
-
-      /** Type tree representing a type binding */
-      type TypeBind = kernel.TypeTree_TypeBind
-
-      /** Type tree within a block with aliases `{ type U1 = ... ; T[U1, U2] }` */
-      type TypeBlock = kernel.TypeTree_TypeBlock
-
-    }
-
-    /** Type tree representing a type bound written in the source */
-    type TypeBoundsTree = kernel.TypeBoundsTree
-
-    /** Type tree representing wildcard type bounds written in the source.
-     *  The wildcard type `_` (for example in in `List[_]`) will be a type tree that
-     *  represents a type but has `TypeBound`a inside.
-     */
-    type WildcardTypeTree = kernel.WildcardTypeTree
 
   /** Type or bounds */
   type TypeOrBounds = kernel.TypeOrBounds
@@ -414,8 +411,11 @@ trait Core {
   /** JVM signature of a method */
   type Signature = kernel.Signature
 
-  /** Source position */
+  /** Position in a source file */
   type Position = kernel.Position
+
+  /** Scala source file */
+  type SourceFile = kernel.SourceFile
 
   /** Comment */
   type Comment = kernel.Comment
@@ -429,22 +429,31 @@ trait Core {
   type Symbol = kernel.Symbol
 
     /** Symbol of a package definition */
-    type PackageSymbol = kernel.PackageSymbol
+    type PackageDefSymbol = kernel.PackageDefSymbol
 
-    /** Symbol of a class definition. This includes anonymous class definitions and the class of a module object. */
-    type ClassSymbol = kernel.ClassSymbol
-
-    /** Symbol of a type (parameter or member) definition. */
+    /** Symbol representing a type definition. */
     type TypeSymbol = kernel.TypeSymbol
 
-    /** Symbol representing a method definition. */
-    type DefSymbol = kernel.DefSymbol
+      /** Symbol of a class definition. This includes anonymous class definitions and the class of a module object. */
+      type ClassDefSymbol = kernel.ClassDefSymbol
 
-    /** Symbol representing a value definition. This includes `val`, `lazy val`, `var`, `object` and parameter definitions. */
-    type ValSymbol = kernel.ValSymbol
+      /** Symbol of a type (parameter or member) definition. */
+      type TypeDefSymbol = kernel.TypeDefSymbol
 
-    /** Symbol representing a bind definition. */
-    type BindSymbol = kernel.BindSymbol
+      /** Symbol representing a type bind definition. */
+      type TypeBindSymbol = kernel.TypeBindSymbol
+
+    /** Symbol representing a term definition. */
+    type TermSymbol = kernel.TermSymbol
+
+      /** Symbol representing a method definition. */
+      type DefDefSymbol = kernel.DefDefSymbol
+
+      /** Symbol representing a value definition. This includes `val`, `lazy val`, `var`, `object` and parameter definitions. */
+      type ValDefSymbol = kernel.ValDefSymbol
+
+      /** Symbol representing a bind definition. */
+      type BindSymbol = kernel.BindSymbol
 
     /** No symbol available. */
     type NoSymbol = kernel.NoSymbol

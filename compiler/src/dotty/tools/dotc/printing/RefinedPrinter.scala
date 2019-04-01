@@ -15,7 +15,7 @@ import Denotations._
 import SymDenotations._
 import StdNames.{nme, tpnme}
 import ast.{Trees, untpd}
-import typer.{Implicits, Namer}
+import typer.{Implicits, Namer, Applications}
 import typer.ProtoTypes._
 import Trees._
 import TypeApplications._
@@ -232,11 +232,11 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
           case dummyTreeOfType(tp) :: Nil if !(tp isRef defn.NullClass) => "null: " ~ toText(tp)
           case _ => toTextGlobal(args, ", ")
         }
-        return "FunProto(" ~ (Str("given ") provided tp.isContextual) ~ argsText ~ "):" ~ toText(resultType)
+        return "[applied to " ~ (Str("given ") provided tp.isContextual) ~ "(" ~ argsText ~ ") returning " ~ toText(resultType) ~ "]"
       case IgnoredProto(ignored) =>
         return "?" ~ (("(ignored: " ~ toText(ignored) ~ ")") provided ctx.settings.verbose.value)
       case tp @ PolyProto(targs, resType) =>
-        return "PolyProto(" ~ toTextGlobal(targs, ", ") ~ "): " ~ toText(resType)
+        return "[applied to [" ~ toTextGlobal(targs, ", ") ~ "] returning " ~ toText(resType)
       case _ =>
     }
     super.toText(tp)
@@ -252,7 +252,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
     ("{" ~ toText(trees, "\n") ~ "}").close
 
   protected def typeApplyText[T >: Untyped](tree: TypeApply[T]): Text = {
-    val isQuote = tree.fun.hasType && tree.fun.symbol == defn.QuotedType_apply
+    val isQuote = tree.fun.hasType && tree.fun.symbol == defn.InternalQuoted_typeQuote
     val (open, close) = if (isQuote) (keywordStr("'["), keywordStr("]")) else ("[", "]")
     toTextLocal(tree.fun).provided(!isQuote) ~ open ~ toTextGlobal(tree.args, ", ") ~ close
   }
@@ -328,10 +328,9 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
         if (name.isTypeName) typeText(txt)
         else txt
       case tree @ Select(qual, name) =>
-        if (tree.hasType && tree.symbol == defn.QuotedExpr_splice) keywordStr("${") ~ toTextLocal(qual) ~ keywordStr("}")
-        else if (tree.hasType && tree.symbol == defn.QuotedType_splice) typeText("${") ~ toTextLocal(qual) ~ typeText("}")
+        if (tree.hasType && tree.symbol == defn.QuotedType_splice) typeText("${") ~ toTextLocal(qual) ~ typeText("}")
         else if (qual.isType) toTextLocal(qual) ~ "#" ~ typeText(toText(name))
-        else toTextLocal(qual) ~ ("." ~ nameIdText(tree) provided name != nme.CONSTRUCTOR)
+        else toTextLocal(qual) ~ ("." ~ nameIdText(tree) provided (name != nme.CONSTRUCTOR || ctx.settings.YprintDebug.value))
       case tree: This =>
         optDotPrefix(tree) ~ keywordStr("this") ~ idText(tree)
       case Super(qual: This, mix) =>
@@ -341,8 +340,10 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
           changePrec (GlobalPrec) {
             keywordStr("throw ") ~ toText(args.head)
           }
-        else if (fun.hasType && fun.symbol == defn.QuotedExpr_apply)
+        else if (fun.hasType && fun.symbol == defn.InternalQuoted_exprQuote)
           keywordStr("'{") ~ toTextGlobal(args, ", ") ~ keywordStr("}")
+        else if (fun.hasType && fun.symbol == defn.InternalQuoted_exprSplice)
+          keywordStr("${") ~ toTextGlobal(args, ", ") ~ keywordStr("}")
         else
           toTextLocal(fun) ~ "(" ~ toTextGlobal(args, ", ") ~ ")"
       case tree: TypeApply =>
@@ -356,11 +357,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
         keywordStr("new ") ~ {
           tpt match {
             case tpt: Template => toTextTemplate(tpt, ofNew = true)
-            case _ =>
-              if (tpt.hasType)
-                toTextLocal(tpt.typeOpt.underlyingClassRef(refinementOK = false))
-              else
-                toTextLocal(tpt)
+            case _ => toTextLocal(tpt)
           }
         }
       case Typed(expr, tpt) =>
@@ -420,7 +417,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
         "[" ~ toTextGlobal(elems, ",") ~ " : " ~ toText(elemtpt) ~ "]"
       case tree @ Inlined(call, bindings, body) =>
         (("/* inlined from " ~ (if (call.isEmpty) "outside" else toText(call)) ~ " */ ") `provided`
-          !homogenizedView && !ctx.settings.YshowNoInline.value) ~
+          !homogenizedView && ctx.settings.XprintInline.value) ~
         blockText(bindings :+ body)
       case tpt: untpd.DerivedTypeTree =>
         "<derived typetree watching " ~ summarized(toText(tpt.watched)) ~ ">"
@@ -487,7 +484,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
             typeDefText(tparamsTxt, optText(rhs)(" = " ~ _))
         }
         recur(rhs, "")
-      case Import(impliedOnly, expr, selectors) =>
+      case Import(importImplied, expr, selectors) =>
         def selectorText(sel: Tree): Text = sel match {
           case Thicket(l :: r :: Nil) => toTextGlobal(l) ~ " => " ~ toTextGlobal(r)
           case _ => toTextGlobal(sel)
@@ -496,7 +493,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
           case id :: Nil => toText(id)
           case _ => "{" ~ Text(selectors map selectorText, ", ") ~ "}"
         }
-        keywordText("import ") ~ (keywordText("implied ") provided impliedOnly) ~
+        keywordText("import ") ~ (keywordText("implied ") provided importImplied) ~
         toTextLocal(expr) ~ "." ~ selectorsText
       case packageDef: PackageDef =>
         packageDefText(packageDef)
@@ -581,6 +578,8 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
         else keywordStr("'{") ~ toTextGlobal(dropBlock(tree)) ~ keywordStr("}")
       case Splice(tree) =>
         keywordStr("${") ~ toTextGlobal(dropBlock(tree)) ~ keywordStr("}")
+      case tree: Applications.IntegratedTypeArgs =>
+        toText(tree.app) ~ Str("(with integrated type args)").provided(ctx.settings.YprintDebug.value)
       case Thicket(trees) =>
         "Thicket {" ~~ toTextGlobal(trees, "\n") ~~ "}"
       case _ =>
@@ -833,7 +832,6 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
     if (flags is Package) "package"
     else if (sym.isPackageObject) "package object"
     else if (flags is Module) "object"
-    else if (flags is ImplClass) "class"
     else if (sym.isClassConstructor) "constructor"
     else super.kindString(sym)
   }

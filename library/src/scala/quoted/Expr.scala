@@ -4,8 +4,6 @@ import scala.runtime.quoted.Unpickler.Pickled
 
 sealed abstract class Expr[+T] {
 
-  final def `$splice`: T = throw new Error("splice should have been compiled away")
-
   /** Evaluate the contents of this expression and return the result.
    *
    *  May throw a FreeVariableError on expressions that came from a macro.
@@ -18,9 +16,6 @@ sealed abstract class Expr[+T] {
 }
 
 object Expr {
-  /** A term quote is desugared by the compiler into a call to this method */
-  def apply[T](x: T): Expr[T] =
-    throw new Error("Internal error: this method call should have been replaced by the compiler")
 
   // TODO simplify using new extension methods
 

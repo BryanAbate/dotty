@@ -431,7 +431,7 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
   val Flag_METHOD: Flags = Flags.Method.bits
   val ExcludedForwarderFlags: Flags = {
       Flags.Specialized | Flags.Lifted | Flags.Protected | Flags.JavaStatic |
-      Flags.Bridge | Flags.Private | Flags.Macro
+      Flags.Private | Flags.Macro
   }.bits
 
   def isQualifierSafeToElide(qual: Tree): Boolean = tpd.isIdempotentExpr(qual)
@@ -666,7 +666,6 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
     def isStrictFP: Boolean = false // todo: implement
     def isLabel: Boolean = sym is Flags.Label
     def hasPackageFlag: Boolean = sym is Flags.Package
-    def isImplClass: Boolean = sym is Flags.ImplClass
     def isInterface: Boolean = (sym is Flags.PureInterface) || (sym is Flags.Trait)
     def isGetter: Boolean = toDenot(sym).isGetter
     def isSetter: Boolean = toDenot(sym).isSetter
@@ -683,7 +682,7 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
 
     def isFinal: Boolean = sym is Flags.Final
     def isStaticMember: Boolean = (sym ne NoSymbol) &&
-      ((sym is Flags.JavaStatic) || (owner is Flags.ImplClass) || toDenot(sym).hasAnnotation(ctx.definitions.ScalaStaticAnnot))
+      ((sym is Flags.JavaStatic) || toDenot(sym).hasAnnotation(ctx.definitions.ScalaStaticAnnot))
       // guard against no sumbol cause this code is executed to select which call type(static\dynamic) to use to call array.clone
 
     def isBottomClass: Boolean = (sym ne defn.NullClass) && (sym ne defn.NothingClass)
@@ -701,7 +700,7 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
     def isNonBottomSubClass(other: Symbol): Boolean = sym.derivesFrom(other)
     def hasAnnotation(ann: Symbol): Boolean = toDenot(sym).hasAnnotation(ann)
     def shouldEmitForwarders: Boolean =
-      (sym is Flags.Module) && !(sym is Flags.ImplClass) && sym.isStatic
+      (sym is Flags.Module) && sym.isStatic
     def isJavaEntryPoint: Boolean = CollectEntryPoints.isJavaEntryPoint(sym)
 
     def isClassConstructor: Boolean = toDenot(sym).isClassConstructor
@@ -766,6 +765,7 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
       }
       else sym.enclosingClass(ctx.withPhase(ctx.flattenPhase.prev))
     } //todo is handled specially for JavaDefined symbols in scalac
+    def nextOverriddenSymbol: Symbol = toDenot(sym).nextOverriddenSymbol
 
     // members
     def primaryConstructor: Symbol = toDenot(sym).primaryConstructor
@@ -1177,9 +1177,9 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
       else {
         val arity = field.meth.tpe.widenDealias.paramTypes.size - _1.size
         val returnsUnit = field.meth.tpe.widenDealias.resultType.classSymbol == UnitClass
-        if (returnsUnit)
-          ctx.requiredClass(("dotty.runtime.function.JProcedure" + arity))
-        else ctx.requiredClass(("dotty.runtime.function.JFunction" + arity))
+        if (returnsUnit) ctx.requiredClass(("dotty.runtime.function.JProcedure" + arity))
+        else if (arity <= 2) ctx.requiredClass(("dotty.runtime.function.JFunction" + arity))
+        else ctx.requiredClass(("scala.Function" + arity))
       }
     }
   }

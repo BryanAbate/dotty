@@ -36,15 +36,16 @@ object Checking {
   /** A general checkBounds method that can be used for TypeApply nodes as
    *  well as for AppliedTypeTree nodes. Also checks that type arguments to
    *  *-type parameters are fully applied.
+   *  See TypeOps.boundsViolations for an explanation of the parameters.
    */
-  def checkBounds(args: List[tpd.Tree], boundss: List[TypeBounds], instantiate: (Type, List[Type]) => Type)(implicit ctx: Context): Unit = {
+  def checkBounds(args: List[tpd.Tree], boundss: List[TypeBounds], instantiate: (Type, List[Type]) => Type, app: Type = NoType)(implicit ctx: Context): Unit = {
     (args, boundss).zipped.foreach { (arg, bound) =>
       if (!bound.isLambdaSub && !arg.tpe.hasSimpleKind) {
         // see MissingTypeParameterFor
         ctx.error(ex"missing type parameter(s) for $arg", arg.sourcePos)
       }
     }
-    for ((arg, which, bound) <- ctx.boundsViolations(args, boundss, instantiate))
+    for ((arg, which, bound) <- ctx.boundsViolations(args, boundss, instantiate, app))
       ctx.error(
           DoesNotConformToBound(arg.tpe, which, bound)(err),
           arg.sourcePos.focus)
@@ -52,7 +53,7 @@ object Checking {
 
   /** Check that type arguments `args` conform to corresponding bounds in `tl`
    *  Note: This does not check the bounds of AppliedTypeTrees. These
-   *  are handled by method checkBounds in FirstTransform
+   *  are handled by method checkAppliedType below.
    */
   def checkBounds(args: List[tpd.Tree], tl: TypeLambda)(implicit ctx: Context): Unit =
     checkBounds(args, tl.paramInfos, _.substParams(tl, _))
@@ -77,7 +78,7 @@ object Checking {
     val bounds = tparams.map(_.paramInfoAsSeenFrom(tree.tpe).bounds)
     def instantiate(bound: Type, args: List[Type]) =
       HKTypeLambda.fromParams(tparams, bound).appliedTo(args)
-    if (boundsCheck) checkBounds(orderedArgs, bounds, instantiate)
+    if (boundsCheck) checkBounds(orderedArgs, bounds, instantiate, tree.tpe)
 
     def checkWildcardApply(tp: Type): Unit = tp match {
       case tp @ AppliedType(tycon, _) =>
@@ -747,7 +748,7 @@ trait Checking {
     typr.println(i"check no double declarations $cls")
 
     def checkDecl(decl: Symbol): Unit = {
-      for (other <- seen(decl.name)) {
+      for (other <- seen(decl.name) if (!decl.isAbsent && !other.isAbsent)) {
         typr.println(i"conflict? $decl $other")
         def javaFieldMethodPair =
           decl.is(JavaDefined) && other.is(JavaDefined) &&
@@ -794,6 +795,19 @@ trait Checking {
           }
         }
         traverser.traverse(call)
+      }
+
+      // Check that constructor call is of the form _.<init>(args1)...(argsN).
+      // This guards against calls resulting from inserted implicits or applies.
+      def checkLegalConstructorCall(tree: Tree, encl: Tree, kind: String): Unit = tree match {
+        case Apply(fn, _) => checkLegalConstructorCall(fn, tree, "")
+        case TypeApply(fn, _) => checkLegalConstructorCall(fn, tree, "type ")
+        case Select(_, nme.CONSTRUCTOR) => // ok
+        case _ => ctx.error(s"too many ${kind}arguments in parent constructor", encl.sourcePos)
+      }
+      call match {
+        case Apply(fn, _) => checkLegalConstructorCall(fn, call, "")
+        case _ =>
       }
     }
 
@@ -998,7 +1012,7 @@ trait Checking {
         val cases =
           for (stat <- impl.body if isCase(stat))
           yield untpd.Ident(stat.symbol.name.toTermName)
-        val caseImport: Import = Import(impliedOnly = false, ref(cdef.symbol), cases)
+        val caseImport: Import = Import(importImplied = false, ref(cdef.symbol), cases)
         val caseCtx = enumCtx.importContext(caseImport, caseImport.symbol)
         for (stat <- impl.body) checkCaseOrDefault(stat, caseCtx)
       case _ =>

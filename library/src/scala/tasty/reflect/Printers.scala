@@ -8,7 +8,6 @@ import scala.tasty.util.Chars
 
 trait Printers
   extends Core
-  with CaseDefOps
   with ConstantOps
   with FlagsOps
   with IdOps
@@ -20,7 +19,6 @@ trait Printers
   with StandardDefinitions
   with SymbolOps
   with TreeOps
-  with TypeOrBoundsTreeOps
   with TypeOrBoundsOps {
 
   /** Adds `show` as an extension method of a `Tree` */
@@ -31,28 +29,12 @@ trait Printers
     def showCode(implicit ctx: Context): String = new SourceCodePrinter().showTree(tree)
   }
 
-  /** Adds `show` as an extension method of a `TypeOrBoundsTree` */
-  implicit class TypeOrBoundsTreeShowDeco(tpt: TypeOrBoundsTree) {
-    /** Shows the tree as extractors */
-    def show(implicit ctx: Context): String = new ExtractorsPrinter().showTypeOrBoundsTree(tpt)
-    /** Shows the tree as source code */
-    def showCode(implicit ctx: Context): String = new SourceCodePrinter().showTypeOrBoundsTree(tpt)
-  }
-
   /** Adds `show` as an extension method of a `TypeOrBounds` */
   implicit class TypeOrBoundsShowDeco(tpe: TypeOrBounds) {
     /** Shows the tree as extractors */
     def show(implicit ctx: Context): String = new ExtractorsPrinter().showTypeOrBounds(tpe)
     /** Shows the tree as source code */
     def showCode(implicit ctx: Context): String = new SourceCodePrinter().showTypeOrBounds(tpe)
-  }
-
-  /** Adds `show` as an extension method of a `CaseDef` */
-  implicit class CaseDefShowDeco(caseDef: CaseDef) {
-    /** Shows the tree as extractors */
-    def show(implicit ctx: Context): String = new ExtractorsPrinter().showCaseDef(caseDef)
-    /** Shows the tree as source code */
-    def showCode(implicit ctx: Context): String = new SourceCodePrinter().showCaseDef(caseDef)
   }
 
   /** Adds `show` as an extension method of a `Pattern` */
@@ -91,11 +73,7 @@ trait Printers
 
     def showTree(tree: Tree)(implicit ctx: Context): String
 
-    def showCaseDef(caseDef: CaseDef)(implicit ctx: Context): String
-
     def showPattern(pattern: Pattern)(implicit ctx: Context): String
-
-    def showTypeOrBoundsTree(tpt: TypeOrBoundsTree)(implicit ctx: Context): String
 
     def showTypeOrBounds(tpe: TypeOrBounds)(implicit ctx: Context): String
 
@@ -111,14 +89,9 @@ trait Printers
 
     def showTree(tree: Tree)(implicit ctx: Context): String =
       new Buffer().visitTree(tree).result()
-    def showCaseDef(caseDef: CaseDef)(implicit ctx: Context): String =
-      new Buffer().visitCaseDef(caseDef).result()
 
     def showPattern(pattern: Pattern)(implicit ctx: Context): String =
       new Buffer().visitPattern(pattern).result()
-
-    def showTypeOrBoundsTree(tpt: TypeOrBoundsTree)(implicit ctx: Context): String =
-      new Buffer().visitTypeTree(tpt).result()
 
     def showTypeOrBounds(tpe: TypeOrBounds)(implicit ctx: Context): String =
       new Buffer().visitType(tpe).result()
@@ -164,7 +137,6 @@ trait Printers
       if (flags.is(Flags.ModuleClass)) flagList += "Flags.ModuleClass"
       if (flags.is(Flags.PrivateLocal)) flagList += "Flags.PrivateLocal"
       if (flags.is(Flags.Package)) flagList += "Flags.Package"
-      if (flags.is(Flags.ImplClass)) flagList += "Flags.ImplClass"
       flagList.result().mkString(" | ")
     }
 
@@ -182,7 +154,7 @@ trait Printers
         case Term.This(qual) =>
           this += "Term.This(" += qual += ")"
         case Term.Super(qual, mix) =>
-          this += "Term.TypeApply(" += qual += ", " += mix += ")"
+          this += "Term.Super(" += qual += ", " += mix += ")"
         case Term.Apply(fun, args) =>
           this += "Term.Apply(" += fun += ", " ++= args += ")"
         case Term.TypeApply(fun, args) =>
@@ -205,6 +177,8 @@ trait Printers
           this += "Term.Lambda(" += meth += ", " += tpt += ")"
         case Term.Match(selector, cases) =>
           this += "Term.Match(" += selector += ", " ++= cases += ")"
+        case Term.ImplicitMatch(cases) =>
+          this += "Term.ImplicitMatch(" ++= cases += ")"
         case Term.Return(expr) =>
           this += "Term.Return(" += expr += ")"
         case Term.While(cond, body) =>
@@ -215,7 +189,7 @@ trait Printers
           this += "Term.Repeated(" ++= elems += ", " += elemtpt += ")"
         case Term.Inlined(call, bindings, expansion) =>
           this += "Term.Inlined("
-          visitOption(call, visitTermOrTypeTree)
+          visitOption(call, visitTree)
           this += ", " ++= bindings += ", " += expansion += ")"
         case ValDef(name, tpt, rhs) =>
           this += "ValDef(\"" += name += "\", " += tpt += ", " += rhs += ")"
@@ -225,25 +199,22 @@ trait Printers
           this += "TypeDef(\"" += name += "\", " += rhs += ")"
         case ClassDef(name, constr, parents, derived, self, body) =>
           this += "ClassDef(\"" += name += "\", " += constr += ", "
-          visitList[TermOrTypeTree](parents, visitTermOrTypeTree)
+          visitList[Tree](parents, visitTree)
           this += ", "
-          visitList[TypeTree](derived, visitTypeTree)
+          visitList[TypeTree](derived, visitTree)
           this += ", " += self += ", " ++= body += ")"
         case PackageDef(name, owner) =>
           this += "PackageDef(\"" += name += "\", " += owner += ")"
-        case Import(impliedOnly, expr, selectors) =>
-          this += "Import(" += impliedOnly += ", " += expr += ", " ++= selectors += ")"
+        case Import(importImplied, expr, selectors) =>
+          this += "Import(" += importImplied += ", " += expr += ", " ++= selectors += ")"
         case PackageClause(pid, stats) =>
           this += "PackageClause(" += pid += ", " ++= stats += ")"
-      }
-
-      def visitTypeTree(x: TypeOrBoundsTree): Buffer = x match {
         case TypeTree.Inferred() =>
           this += "TypeTree.Inferred()"
-        case TypeTree.Ident(name) =>
-          this += "TypeTree.Ident(\"" += name += "\")"
-        case TypeTree.Select(qualifier, name) =>
-          this += "TypeTree.Select(" += qualifier += ", \"" += name += "\")"
+        case TypeTree.TypeIdent(name) =>
+          this += "TypeTree.TypeIdent(\"" += name += "\")"
+        case TypeTree.TypeSelect(qualifier, name) =>
+          this += "TypeTree.TypeSelect(" += qualifier += ", \"" += name += "\")"
         case TypeTree.Projection(qualifier, name) =>
           this += "TypeTree.Projection(" += qualifier += ", \"" += name += "\")"
         case TypeTree.Singleton(ref) =>
@@ -266,18 +237,12 @@ trait Printers
           this += "TypeBoundsTree(" += lo += ", " += hi += ")"
         case WildcardTypeTree() =>
           this += s"WildcardTypeTree()"
-        case TypeTree.MatchType(bound, selector, cases) =>
-          this += "TypeTree.MatchType(" += bound += ", " += selector += ", " ++= cases += ")"
-      }
-
-      def visitCaseDef(x: CaseDef): Buffer = {
-        val CaseDef(pat, guard, body) = x
-        this += "CaseDef(" += pat += ", " += guard += ", " += body += ")"
-      }
-
-      def visitTypeCaseDef(x: TypeCaseDef): Buffer = {
-        val TypeCaseDef(pat, body) = x
-        this += "TypeCaseDef(" += pat += ", " += body += ")"
+        case TypeTree.MatchTypeTree(bound, selector, cases) =>
+          this += "TypeTree.MatchTypeTree(" += bound += ", " += selector += ", " ++= cases += ")"
+        case CaseDef(pat, guard, body) =>
+          this += "CaseDef(" += pat += ", " += guard += ", " += body += ")"
+        case TypeCaseDef(pat, body) =>
+          this += "TypeCaseDef(" += pat += ", " += body += ")"
       }
 
       def visitPattern(x: Pattern): Buffer = x match {
@@ -291,11 +256,6 @@ trait Printers
           this += "Pattern.Alternative(" ++= patterns += ")"
         case Pattern.TypeTest(tpt) =>
           this += "Pattern.TypeTest(" += tpt += ")"
-      }
-
-      def visitTermOrTypeTree(x: TermOrTypeTree): Buffer = x match {
-        case IsTerm(termOrTypeTree) => this += termOrTypeTree
-        case IsTypeTree(termOrTypeTree) => this += termOrTypeTree
       }
 
       def visitConstant(x: Constant): Buffer = x match {
@@ -377,11 +337,11 @@ trait Printers
       }
 
       def visitSymbol(x: Symbol): Buffer = x match {
-        case IsPackageSymbol(x) => this += "IsPackageSymbol(<" += x.fullName += ">)"
-        case IsClassSymbol(x) => this += "IsClassSymbol(<" += x.fullName += ">)"
-        case IsDefSymbol(x) => this += "IsDefSymbol(<" += x.fullName += ">)"
-        case IsValSymbol(x) => this += "IsValSymbol(<" += x.fullName += ">)"
-        case IsTypeSymbol(x) => this += "IsTypeSymbol(<" += x.fullName += ">)"
+        case IsPackageDefSymbol(x) => this += "IsPackageDefSymbol(<" += x.fullName += ">)"
+        case IsClassDefSymbol(x) => this += "IsClassDefSymbol(<" += x.fullName += ">)"
+        case IsDefDefSymbol(x) => this += "IsDefDefSymbol(<" += x.fullName += ">)"
+        case IsValDefSymbol(x) => this += "IsValDefSymbol(<" += x.fullName += ">)"
+        case IsTypeDefSymbol(x) => this += "IsTypeDefSymbol(<" += x.fullName += ">)"
         case NoSymbol() => this += "NoSymbol()"
       }
 
@@ -404,16 +364,6 @@ trait Printers
         def +++=(x: List[List[Tree]]): Buffer = { visitList(x, ++=); buff }
       }
 
-      private implicit class CaseDefOps(buff: Buffer) {
-        def +=(x: CaseDef): Buffer = { visitCaseDef(x); buff }
-        def ++=(x: List[CaseDef]): Buffer = { visitList(x, visitCaseDef); buff }
-      }
-
-      private implicit class TypeCaseDefOps(buff: Buffer) {
-        def +=(x: TypeCaseDef): Buffer = { visitTypeCaseDef(x); buff }
-        def ++=(x: List[TypeCaseDef]): Buffer = { visitList(x, visitTypeCaseDef); buff }
-      }
-
       private implicit class PatternOps(buff: Buffer) {
         def +=(x: Pattern): Buffer = { visitPattern(x); buff }
         def ++=(x: List[Pattern]): Buffer = { visitList(x, visitPattern); buff }
@@ -421,12 +371,6 @@ trait Printers
 
       private implicit class ConstantOps(buff: Buffer) {
         def +=(x: Constant): Buffer = { visitConstant(x); buff }
-      }
-
-      private implicit class TypeTreeOps(buff: Buffer) {
-        def +=(x: TypeOrBoundsTree): Buffer = { visitTypeTree(x); buff }
-        def +=(x: Option[TypeOrBoundsTree]): Buffer = { visitOption(x, visitTypeTree); buff }
-        def ++=(x: List[TypeOrBoundsTree]): Buffer = { visitList(x, visitTypeTree); buff }
       }
 
       private implicit class TypeOps(buff: Buffer) {
@@ -487,17 +431,11 @@ trait Printers
     def showTree(tree: Tree)(implicit ctx: Context): String =
       (new Buffer).printTree(tree).result()
 
-    def showCaseDef(caseDef: CaseDef)(implicit ctx: Context): String =
-      (new Buffer).printCaseDef(caseDef).result()
-
     def showPattern(pattern: Pattern)(implicit ctx: Context): String =
       (new Buffer).printPattern(pattern).result()
 
-    def showTypeOrBoundsTree(tpt: TypeOrBoundsTree)(implicit ctx: Context): String =
-      (new Buffer).printTypeOrBoundsTree(tpt).result()
-
     def showTypeOrBounds(tpe: TypeOrBounds)(implicit ctx: Context): String =
-      (new Buffer).printTypeOrBound(tpe).result()
+      (new Buffer).printTypeOrBound(tpe)(None).result()
 
     def showConstant(const: Constant)(implicit ctx: Context): String =
       (new Buffer).printConstant(const).result()
@@ -540,7 +478,6 @@ trait Printers
       if (flags.is(Flags.ModuleClass)) flagList += "moduleClass"
       if (flags.is(Flags.PrivateLocal)) flagList += "private[this]"
       if (flags.is(Flags.Package)) flagList += "package"
-      if (flags.is(Flags.ImplClass)) flagList += "implClass"
       flagList.result().mkString("/*", " ", "*/")
     }
 
@@ -581,7 +518,7 @@ trait Printers
       def lineBreak(): String = "\n" + ("  " * indent)
       def doubleLineBreak(): String = "\n\n" + ("  " * indent)
 
-      def printTree(tree: Tree): Buffer = tree match {
+      def printTree(tree: Tree)(implicit elideThis: Option[Symbol] = None): Buffer = tree match {
         case PackageObject(body)=>
           printTree(body) // Print package object
 
@@ -604,9 +541,9 @@ trait Printers
               inBlock(printTrees(stats1, lineBreak()))
           }
 
-        case Import(impliedOnly, expr, selectors) =>
+        case Import(importImplied, expr, selectors) =>
           this += "import "
-          if (impliedOnly) this += "implied "
+          if (importImplied) this += "implied "
           printTree(expr)
           this += "."
           printImportSelectors(selectors)
@@ -638,33 +575,33 @@ trait Printers
 
           val parents1 = parents.filter {
             case IsTerm(Term.Apply(Term.Select(Term.New(tpt), _), _)) => !Types.JavaLangObject.unapply(tpt.tpe)
-            case IsTypeTree(TypeTree.Select(Term.Select(Term.Ident("_root_"), "scala"), "Product")) => false
-            case IsTypeTree(TypeTree.Select(Term.Select(Term.Ident("_root_"), "scala"), "Serializable")) => false
+            case IsTypeTree(TypeTree.TypeSelect(Term.Select(Term.Ident("_root_"), "scala"), "Product")) => false
+            case IsTypeTree(TypeTree.TypeSelect(Term.Select(Term.Ident("_root_"), "scala"), "Serializable")) => false
             case _ => true
           }
           if (parents1.nonEmpty)
             this += highlightKeyword(" extends ", color)
 
-          def printParent(parent: TermOrTypeTree, needEmptyParens: Boolean = false): Unit = parent match {
+          def printParent(parent: Tree /* Term | TypeTree */, needEmptyParens: Boolean = false): Unit = parent match {
             case IsTypeTree(parent) =>
-              printTypeTree(parent)
+              printTypeTree(parent)(Some(cdef.symbol))
             case IsTerm(Term.TypeApply(fun, targs)) =>
               printParent(fun)
             case IsTerm(Term.Apply(fun@Term.Apply(_,_), args)) =>
               printParent(fun, true)
               if (!args.isEmpty || needEmptyParens)
-                inParens(printTrees(args, ", "))
+                inParens(printTrees(args, ", ")(Some(cdef.symbol)))
             case IsTerm(Term.Apply(fun, args)) =>
               printParent(fun)
               if (!args.isEmpty || needEmptyParens)
-                inParens(printTrees(args, ", "))
-            case IsTerm(Term.Select(Term.New(tpt), _)) =>
-              printTypeTree(tpt)
+                inParens(printTrees(args, ", ")(Some(cdef.symbol)))
+            case IsTerm(Term.Select(Term.IsNew(newTree), _)) =>
+              printType(newTree.tpe)(Some(cdef.symbol))
             case IsTerm(parent) =>
               throw new MatchError(parent.show)
           }
 
-          def printSeparated(list: List[TermOrTypeTree]): Unit = list match {
+          def printSeparated(list: List[Tree /* Term | TypeTree */]): Unit = list match {
             case Nil =>
             case x :: Nil => printParent(x)
             case x :: xs =>
@@ -711,7 +648,7 @@ trait Printers
                 indented {
                   val name1 = if (name == "_") "this" else name
                   this += " " += highlightValDef(name1, color) += ": "
-                  printTypeTree(tpt)
+                  printTypeTree(tpt)(Some(cdef.symbol))
                   this += " =>"
                 }
               }
@@ -821,7 +758,7 @@ trait Printers
           printType(tree.tpe)
 
         case Term.Select(qual, name) =>
-          printTree(qual)
+          printQualTree(qual)
           if (name != "<init>" && name != "package")
             this += "." += name
           this
@@ -837,9 +774,9 @@ trait Printers
           }
           this += "this"
 
-        case Term.New(tpt) =>
+        case Term.IsNew(tree) =>
           this += "new "
-          printTypeTree(tpt)
+          printType(tree.tpe)
 
         case Term.NamedArg(name, arg) =>
           this += name += " = "
@@ -849,10 +786,30 @@ trait Printers
           this += "throw "
           printTree(expr)
 
+        case Term.Apply(fn, args) if fn.symbol.fullName == "scala.internal.Quoted$.exprQuote" =>
+          args.head match {
+            case Term.Block(stats, expr) =>
+              this += "'{"
+              indented {
+                this += lineBreak()
+                printFlatBlock(stats, expr)
+              }
+              this += lineBreak() += "}"
+            case _ =>
+              this += "'{"
+              printTree(args.head)
+              this += "}"
+          }
+
+        case Term.TypeApply(fn, args) if fn.symbol.fullName == "scala.internal.Quoted$.typeQuote" =>
+          this += "'["
+          printTypeTree(args.head)
+          this += "]"
+
         case Term.Apply(fn, args) =>
           fn match {
             case Term.Select(Term.This(_), "<init>") => this += "this" // call to constructor inside a constructor
-            case _ => printTree(fn)
+            case _ => printQualTree(fn)
           }
           val args1 = args match {
             case init :+ Term.Typed(Term.Repeated(Nil, _), _) => init // drop empty var args at the end
@@ -862,13 +819,13 @@ trait Printers
           inParens(printTrees(args1, ", "))
 
         case Term.TypeApply(fn, args) =>
-          printTree(fn)
+          printQualTree(fn)
           fn match {
             case Term.Select(Term.New(TypeTree.Applied(_, _)), "<init>") =>
               // type bounds already printed in `fn`
               this
             case _ =>
-              inSquare(printTypeOrBoundsTrees(args, ", "))
+              inSquare(printTrees(args, ", "))
           }
 
         case Term.Super(qual, idOpt) =>
@@ -937,8 +894,12 @@ trait Printers
           printTree(elsep)
 
         case Term.Match(selector, cases) =>
-          printTree(selector)
+          printQualTree(selector)
           this += highlightKeyword(" match", color)
+          inBlock(printCases(cases, lineBreak()))
+
+        case Term.ImplicitMatch(cases) =>
+          this += highlightKeyword("implicit match", color)
           inBlock(printCases(cases, lineBreak()))
 
         case Term.Try(body, cases, finallyOpt) =>
@@ -963,9 +924,29 @@ trait Printers
         case Term.Repeated(elems, _) =>
           printTrees(elems, ", ")
 
+        case TypeBoundsTree(lo, hi) =>
+          this += "_ >: "
+          printTypeTree(lo)
+          this += " <: "
+          printTypeTree(hi)
+
+        case IsWildcardTypeTree(tpt) =>
+          printTypeOrBound(tpt.tpe)
+
+        case IsTypeTree(tpt) =>
+          printTypeTree(tpt)
+
         case _ =>
           throw new MatchError(tree.show)
 
+      }
+
+      def printQualTree(tree: Tree): Buffer = tree match {
+        case Term.IsIf(_) | Term.IsMatch(_) | Term.IsWhile(_) | Term.IsTry(_) | Term.IsReturn(_) =>
+          this += "("
+          printTree(tree)
+          this += ")"
+        case _ => printTree(tree)
       }
 
       def flatBlock(stats: List[Statement], expr: Term): (List[Statement], Term) = {
@@ -1004,7 +985,7 @@ trait Printers
         (flatStats.result(), flatExpr)
       }
 
-      def printFlatBlock(stats: List[Statement], expr: Term): Buffer = {
+      def printFlatBlock(stats: List[Statement], expr: Term)(implicit elideThis: Option[Symbol]): Buffer = {
         val (stats1, expr1) = flatBlock(stats, expr)
         // Remove Term.Lambda nodes, lambdas are printed by their definition
         val stats2 = stats1.filter { case Term.Lambda(_, _) => false; case _ => true }
@@ -1025,7 +1006,7 @@ trait Printers
         }
       }
 
-      def printStats(stats: List[Tree], expr: Tree): Unit = {
+      def printStats(stats: List[Tree], expr: Tree)(implicit elideThis: Option[Symbol]): Unit = {
         def printSeparator(next: Tree): Unit = {
           // Avoid accidental application of opening `{` on next line with a double break
           def rec(next: Tree): Unit = next match {
@@ -1034,6 +1015,7 @@ trait Printers
             case Term.Select(qual, _) => rec(qual)
             case Term.Apply(fn, _) => rec(fn)
             case Term.TypeApply(fn, _) => rec(fn)
+            case Term.Typed(_, _) => this += doubleLineBreak()
             case _ => this += lineBreak()
           }
           next match {
@@ -1071,13 +1053,13 @@ trait Printers
         this
       }
 
-      def printTrees(trees: List[Tree], sep: String): Buffer =
-        printList(trees, sep, printTree)
+      def printTrees(trees: List[Tree], sep: String)(implicit elideThis: Option[Symbol]): Buffer =
+        printList(trees, sep, (t: Tree) => printTree(t))
 
-      def printTypeTrees(trees: List[TypeTree], sep: String): Buffer =
-        printList(trees, sep, printTypeTree)
+      def printTypeTrees(trees: List[TypeTree], sep: String)(implicit elideThis: Option[Symbol] = None): Buffer =
+        printList(trees, sep, (t: TypeTree) => printTypeTree(t))
 
-      def printTypes(trees: List[Type], sep: String): Buffer = {
+      def printTypes(trees: List[Type], sep: String)(implicit elideThis: Option[Symbol]): Buffer = {
         def printSeparated(list: List[Type]): Unit = list match {
           case Nil =>
           case x :: Nil => printType(x)
@@ -1143,20 +1125,7 @@ trait Printers
         this
       }
 
-      def printTypeOrBoundsTrees(typesTrees: List[TypeOrBoundsTree], sep: String): Buffer = {
-        def printSeparated(list: List[TypeOrBoundsTree]): Unit = list match {
-          case Nil =>
-          case x :: Nil => printTypeOrBoundsTree(x)
-          case x :: xs =>
-            printTypeOrBoundsTree(x)
-            this += sep
-            printSeparated(xs)
-        }
-        printSeparated(typesTrees)
-        this
-      }
-
-      def printTypesOrBounds(types: List[TypeOrBounds], sep: String): Buffer = {
+      def printTypesOrBounds(types: List[TypeOrBounds], sep: String)(implicit elideThis: Option[Symbol]): Buffer = {
         def printSeparated(list: List[TypeOrBounds]): Unit = list match {
           case Nil =>
           case x :: Nil => printTypeOrBound(x)
@@ -1169,7 +1138,7 @@ trait Printers
         this
       }
 
-      def printTargsDefs(targs: List[(TypeDef, TypeDef)], isDef:Boolean = true): Unit = {
+      def printTargsDefs(targs: List[(TypeDef, TypeDef)], isDef:Boolean = true)(implicit elideThis: Option[Symbol]): Unit = {
         if (!targs.isEmpty) {
           def printSeparated(list: List[(TypeDef, TypeDef)]): Unit = list match {
             case Nil =>
@@ -1184,7 +1153,7 @@ trait Printers
         }
       }
 
-      def printTargDef(arg: (TypeDef, TypeDef), isMember: Boolean = false, isDef:Boolean = true): Buffer = {
+      def printTargDef(arg: (TypeDef, TypeDef), isMember: Boolean = false, isDef:Boolean = true)(implicit elideThis: Option[Symbol]): Buffer = {
         val (argDef, argCons) = arg
 
         if (isDef) {
@@ -1198,10 +1167,10 @@ trait Printers
         this += argCons.name
         argCons.rhs match {
           case IsTypeBoundsTree(rhs) => printBoundsTree(rhs)
-          case rhs @ WildcardTypeTree() =>
+          case IsWildcardTypeTree(rhs) =>
             printTypeOrBound(rhs.tpe)
           case rhs @ TypeTree.LambdaTypeTree(tparams, body) =>
-            def printParam(t: TypeOrBoundsTree): Unit = t match {
+            def printParam(t: Tree /*TypeTree | TypeBoundsTree*/): Unit = t match {
               case IsTypeBoundsTree(t) => printBoundsTree(t)
               case IsTypeTree(t) => printTypeTree(t)
             }
@@ -1219,7 +1188,7 @@ trait Printers
             inSquare(printSeparated(tparams))
             if (isMember) {
               body match {
-                case TypeTree.MatchType(Some(bound), _, _) =>
+                case TypeTree.MatchTypeTree(Some(bound), _, _) =>
                   this +=  " <: "
                   printTypeTree(bound)
                 case _ =>
@@ -1234,7 +1203,7 @@ trait Printers
         }
       }
 
-      def printArgsDefs(args: List[ValDef]): Unit = inParens {
+      def printArgsDefs(args: List[ValDef])(implicit elideThis: Option[Symbol]): Unit = inParens {
         args match {
           case Nil =>
           case arg :: _ =>
@@ -1254,7 +1223,7 @@ trait Printers
         printSeparated(args)
       }
 
-      def printAnnotations(trees: List[Term]): Buffer = {
+      def printAnnotations(trees: List[Term])(implicit elideThis: Option[Symbol]): Buffer = {
         def printSeparated(list: List[Term]): Unit = list match {
           case Nil =>
           case x :: Nil => printAnnotation(x)
@@ -1267,11 +1236,11 @@ trait Printers
         this
       }
 
-      def printParamDef(arg: ValDef): Unit = {
+      def printParamDef(arg: ValDef)(implicit elideThis: Option[Symbol]): Unit = {
         val name = arg.name
         arg.symbol.owner match {
-          case IsDefSymbol(sym) if sym.name == "<init>" =>
-            val ClassDef(_, _, _, _, _, body) = sym.owner.asClass.tree
+          case IsDefDefSymbol(sym) if sym.name == "<init>" =>
+            val ClassDef(_, _, _, _, _, body) = sym.owner.asClassDef.tree
             body.collectFirst {
               case IsValDef(vdef @ ValDef(`name`, _, _)) if vdef.symbol.flags.is(Flags.ParamAccessor) =>
                 if (!vdef.symbol.flags.is(Flags.Local)) {
@@ -1305,7 +1274,7 @@ trait Printers
         indented {
           caseDef.rhs match {
             case Term.Block(stats, expr) =>
-              printStats(stats, expr)
+              printStats(stats, expr)(None)
             case body =>
               this += lineBreak()
               printTree(body)
@@ -1379,19 +1348,27 @@ trait Printers
           this += highlightLiteral("'" + v.name, color)
       }
 
-      def printTypeOrBoundsTree(tpt: TypeOrBoundsTree): Buffer = tpt match {
+      def printTypeOrBoundsTree(tpt: Tree)(implicit elideThis: Option[Symbol] = None): Buffer = tpt match {
         case TypeBoundsTree(lo, hi) =>
           this += "_ >: "
           printTypeTree(lo)
           this += " <: "
           printTypeTree(hi)
-        case tpt @ WildcardTypeTree() =>
+        case IsWildcardTypeTree(tpt) =>
           printTypeOrBound(tpt.tpe)
         case IsTypeTree(tpt) =>
           printTypeTree(tpt)
       }
 
-      def printTypeTree(tree: TypeTree): Buffer = tree match {
+      /** Print type tree
+       *
+       *  @param elideThis Shoud printing elide `C.this` for the given class `C`?
+       *                   None means no eliding.
+       *
+       *   Self type annotation and types in parent list should elide current class
+       *   prefix `C.this` to avoid type checking errors.
+       */
+      def printTypeTree(tree: TypeTree)(implicit elideThis: Option[Symbol] = None): Buffer = tree match {
         case TypeTree.Inferred() =>
           // TODO try to move this logic into `printType`
           def printTypeAndAnnots(tpe: Type): Buffer = tpe match {
@@ -1399,20 +1376,23 @@ trait Printers
               printTypeAndAnnots(tp)
               this += " "
               printAnnotation(annot)
-            case Type.SymRef(IsClassSymbol(sym), _) if sym.fullName == "scala.runtime.Null$" || sym.fullName == "scala.runtime.Nothing$" =>
+            case Type.SymRef(IsClassDefSymbol(sym), _) if sym.fullName == "scala.runtime.Null$" || sym.fullName == "scala.runtime.Nothing$" =>
               // scala.runtime.Null$ and scala.runtime.Nothing$ are not modules, those are their actual names
               printType(tpe)
-            case tpe @ Type.SymRef(IsClassSymbol(sym), _) if sym.name.endsWith("$") =>
+            case tpe @ Type.SymRef(IsClassDefSymbol(sym), _) if sym.name.endsWith("$") =>
+              printType(tpe)
+              this += ".type"
+            case tpe @ Type.SymRef(sym, _) if sym.isTerm =>
               printType(tpe)
               this += ".type"
             case tpe => printType(tpe)
           }
           printTypeAndAnnots(tree.tpe)
 
-        case TypeTree.Ident(name) =>
+        case TypeTree.TypeIdent(name) =>
           printType(tree.tpe)
 
-        case TypeTree.Select(qual, name) =>
+        case TypeTree.TypeSelect(qual, name) =>
           printTree(qual) += "." += highlightTypeDef(name, color)
 
         case TypeTree.Projection(qual, name) =>
@@ -1431,7 +1411,7 @@ trait Printers
 
         case TypeTree.Applied(tpt, args) =>
           printTypeTree(tpt)
-          inSquare(printTypeOrBoundsTrees(args, ", "))
+          inSquare(printTrees(args, ", "))
 
         case TypeTree.Annotated(tpt, annot) =>
           val Annotation(ref, args) = annot
@@ -1446,7 +1426,7 @@ trait Printers
               printAnnotation(annot)
           }
 
-        case TypeTree.MatchType(bound, selector, cases) =>
+        case TypeTree.MatchTypeTree(bound, selector, cases) =>
           printTypeTree(selector)
           this += highlightKeyword(" match ", color)
           inBlock(printTypeCases(cases, lineBreak()))
@@ -1474,7 +1454,7 @@ trait Printers
 
       }
 
-      def printTypeOrBound(tpe: TypeOrBounds): Buffer = tpe match {
+      def printTypeOrBound(tpe: TypeOrBounds)(implicit elideThis: Option[Symbol]): Buffer = tpe match {
         case tpe@TypeBounds(lo, hi) =>
           this += "_ >: "
           printType(lo)
@@ -1483,23 +1463,49 @@ trait Printers
         case IsType(tpe) => printType(tpe)
       }
 
-      def printType(tpe: Type): Buffer = tpe match {
+      /** Print type
+       *
+       *  @param elideThis Shoud printing elide `C.this` for the given class `C`?
+       *                   None means no eliding.
+       *
+       *   Self type annotation and types in parent list should elide current class
+       *   prefix `C.this` to avoid type checking errors.
+       */
+      def printType(tpe: Type)(implicit elideThis: Option[Symbol] = None): Buffer = tpe match {
         case Type.ConstantType(const) =>
           printConstant(const)
 
-        case Type.SymRef(sym, prefix) =>
+        case Type.SymRef(sym, prefix) if sym.isType =>
           prefix match {
-            case Types.EmptyPrefix() =>
-            case IsType(prefix @ Type.SymRef(IsClassSymbol(_), _)) =>
+            case Type.ThisType(Types.EmptyPackage() | Types.RootPackage()) =>
+            case NoPrefix() =>
+              if (sym.owner.flags.is(Flags.Package)) {
+                // TODO should these be in the prefix? These are at least `scala`, `java` and `scala.collection`.
+                val packagePath = sym.owner.fullName.stripPrefix("<root>").stripPrefix("<empty>").stripPrefix(".")
+                if (packagePath != "")
+                  this += packagePath += "."
+              }
+            case IsType(prefix @ Type.SymRef(IsClassDefSymbol(_), _)) =>
               printType(prefix)
               this += "#"
+            case IsType(Type.ThisType(Type.SymRef(cdef, _)))
+            if elideThis.nonEmpty && cdef == elideThis.get =>
             case IsType(prefix) =>
-              if (!sym.flags.is(Flags.Local)) {
-                printType(prefix)
-                this += "."
-              }
+              printType(prefix)
+              this += "."
           }
           this += highlightTypeDef(sym.name.stripSuffix("$"), color)
+
+        case Type.SymRef(sym, prefix) if sym.isTerm =>
+          prefix match {
+            case NoPrefix() | Type.ThisType(Types.EmptyPackage() | Types.RootPackage()) =>
+                this += highlightTypeDef(sym.name, color)
+            case _ =>
+              printTypeOrBound(prefix)
+              if (sym.name != "package")
+                this += "." += highlightTypeDef(sym.name, color)
+              this
+          }
 
         case Type.TermRef(name, prefix) =>
           prefix match {
@@ -1566,7 +1572,7 @@ trait Printers
               this += highlightTypeDef(".this", color)
             case Type.TypeRef(name, prefix) if name.endsWith("$") =>
               prefix match {
-                case Types.EmptyPrefix() =>
+                case NoPrefix() | Type.ThisType(Types.EmptyPackage() | Types.RootPackage()) =>
                 case _ =>
                   printTypeOrBound(prefix)
                   this += "."
@@ -1616,7 +1622,7 @@ trait Printers
         case PackageDef(name, _) => this += highlightTypeDef(name, color)
       }
 
-      def printAnnotation(annot: Term): Buffer = {
+      def printAnnotation(annot: Term)(implicit elideThis: Option[Symbol]): Buffer = {
         val Annotation(ref, args) = annot
         this += "@"
         printTypeTree(ref)
@@ -1626,7 +1632,7 @@ trait Printers
           inParens(printTrees(args, ", "))
       }
 
-      def printDefAnnotations(definition: Definition): Buffer = {
+      def printDefAnnotations(definition: Definition)(implicit elideThis: Option[Symbol]): Buffer = {
         val annots = definition.symbol.annots.filter {
           case Annotation(annot, _) =>
             annot.tpe match {
@@ -1641,7 +1647,7 @@ trait Printers
         else this
       }
 
-      def printRefinement(tpe: Type): Buffer = {
+      def printRefinement(tpe: Type)(implicit elideThis: Option[Symbol]): Buffer = {
         def printMethodicType(tp: TypeOrBounds): Unit = tp match {
           case tp @ Type.MethodType(paramNames, params, res) =>
             inParens(printMethodicTypeParams(paramNames, params))
@@ -1681,7 +1687,7 @@ trait Printers
         this += lineBreak() += "}"
       }
 
-      def printMethodicTypeParams(paramNames: List[String], params: List[TypeOrBounds]): Unit = {
+      def printMethodicTypeParams(paramNames: List[String], params: List[TypeOrBounds])(implicit elideThis: Option[Symbol]): Unit = {
         def printInfo(info: TypeOrBounds) = info match {
           case IsTypeBounds(info) => printBounds(info)
           case IsType(info) =>
@@ -1702,7 +1708,7 @@ trait Printers
         printSeparated(paramNames.zip(params))
       }
 
-      def printBoundsTree(bounds: TypeBoundsTree): Buffer = {
+      def printBoundsTree(bounds: TypeBoundsTree)(implicit elideThis: Option[Symbol]): Buffer = {
         bounds.low match {
           case TypeTree.Inferred() =>
           case low =>
@@ -1717,7 +1723,7 @@ trait Printers
         }
       }
 
-      def printBounds(bounds: TypeBounds): Buffer = {
+      def printBounds(bounds: TypeBounds)(implicit elideThis: Option[Symbol]): Buffer = {
         this += " >: "
         printType(bounds.low)
         this += " <: "
@@ -1755,7 +1761,7 @@ trait Printers
 
       def printFullClassName(tp: TypeOrBounds): Unit = {
         def printClassPrefix(prefix: TypeOrBounds): Unit = prefix match {
-          case Type.SymRef(IsClassSymbol(sym), prefix2) =>
+          case Type.SymRef(IsClassDefSymbol(sym), prefix2) =>
             printClassPrefix(prefix2)
             this += sym.name += "."
           case _ =>
@@ -1794,7 +1800,7 @@ trait Printers
       def unapply(arg: Tree)(implicit ctx: Context): Option[(String, List[Term])] = arg match {
         case IsTerm(arg @ Term.Apply(fn, args)) =>
           fn.tpe match {
-            case Type.SymRef(IsDefSymbol(sym), Type.ThisType(Type.SymRef(sym2, _))) if sym2.name == "<special-ops>" =>
+            case Type.SymRef(IsDefDefSymbol(sym), Type.ThisType(Type.SymRef(sym2, _))) if sym2.name == "<special-ops>" =>
               Some((sym.tree.name, args))
             case _ => None
           }
@@ -1863,12 +1869,6 @@ trait Printers
         }
       }
 
-      object EmptyPrefix {
-        def unapply(tpe: TypeOrBounds)(implicit ctx: Context): Boolean = tpe match {
-          case NoPrefix() | Type.ThisType(Types.EmptyPackage() | Types.RootPackage()) => true
-          case _ => false
-        }
-      }
     }
 
     object PackageObject {

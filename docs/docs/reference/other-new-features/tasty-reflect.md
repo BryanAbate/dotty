@@ -88,52 +88,51 @@ TASTy Reflect provides the following types:
 +- Tree -+- PackageClause
          +- Import
          +- Statement -+- Definition --+- PackageDef
-                       |               +- ClassDef
-                       |               +- TypeDef
-                       |               +- DefDef
-                       |               +- ValDef
-                       |
-                       +- Term --------+- Ident
-                                       +- Select
-                                       +- Literal
-                                       +- This
-                                       +- New
-                                       +- NamedArg
-                                       +- Apply
-                                       +- TypeApply
-                                       +- Super
-                                       +- Typed
-                                       +- Assign
-                                       +- Block
-                                       +- Lambda
-                                       +- If
-                                       +- Match
-                                       +- Try
-                                       +- Return
-                                       +- Repeated
-                                       +- Inlined
-                                       +- SelectOuter
-                                       +- While
-
-
-                       +- TypeTree ----+- Synthetic
-                       |               +- Ident
-                       |               +- Select
-                       |               +- Project
-                       |               +- Singleton
-+- TypeOrBoundsTree ---+               +- Refined
-                       |               +- Applied
-                       |               +- Annotated
-                       |               +- MatchType
-                       |               +- ByName
-                       |               +- LambdaTypeTree
-                       |               +- Bind
-                       |
-                       +- TypeBoundsTree
-                       +- SyntheticBounds
-
-+- CaseDef
-+- TypeCaseDef
+         |             |               +- ClassDef
+         |             |               +- TypeDef
+         |             |               +- DefDef
+         |             |               +- ValDef
+         |             |
+         |             +- Term --------+- Ident
+         |                             +- Select
+         |                             +- Literal
+         |                             +- This
+         |                             +- New
+         |                             +- NamedArg
+         |                             +- Apply
+         |                             +- TypeApply
+         |                             +- Super
+         |                             +- Typed
+         |                             +- Assign
+         |                             +- Block
+         |                             +- Lambda
+         |                             +- If
+         |                             +- Match
+         |                             +- ImplicitMatch
+         |                             +- Try
+         |                             +- Return
+         |                             +- Repeated
+         |                             +- Inlined
+         |                             +- SelectOuter
+         |                             +- While
+         |
+         +- TypeTree ----+- Inferred
+         |               +- TypeIdent
+         |               +- TypeSelect
+         |               +- Project
+         |               +- Singleton
+         |               +- Refined
+         |               +- Applied
+         |               +- Annotated
+         |               +- MatchTypeTree
+         |               +- ByName
+         |               +- LambdaTypeTree
+         |               +- Bind
+         |
+         +- TypeBoundsTree
+         +- SyntheticBounds
+         +- CaseDef
+         +- TypeCaseDef
 
 +- Pattern --+- Value
              +- Bind
@@ -179,16 +178,15 @@ TASTy Reflect provides the following types:
 
 +- Constant
 
-+- Symbol --+- PackageSymbol
-            +- ClassSymbol
-            +- TypeSymbol
-            +- DefSymbol
-            +- ValSymbol
++- Symbol --+- PackageDefSymbol
+            +- ClassDefSymbol
+            +- TypeDefSymbol
+            +- TypeBindSymbol
+            +- DefDefSymbol
+            +- ValDefSymbol
             +- BindSymbol
             +- NoSymbol
 
-Aliases:
- # TermOrTypeTree = Term | TypeTree
 ```
 
 ## More Examples

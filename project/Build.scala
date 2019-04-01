@@ -32,14 +32,14 @@ object Build {
   val scalacVersion = "2.12.8"
 
   val baseVersion = "0.14.0"
-  val baseSbtDottyVersion = "0.3.1"
+  val baseSbtDottyVersion = "0.3.2"
 
   // Versions used by the vscode extension to create a new project
   // This should be the latest published releases.
   // TODO: Have the vscode extension fetch these numbers from the Internet
   // instead of hardcoding them ?
   val publishedDottyVersion = "0.13.0-RC1"
-  val publishedSbtDottyVersion = "0.3.0"
+  val publishedSbtDottyVersion = "0.3.1"
 
 
   val dottyOrganization = "ch.epfl.lamp"
@@ -468,6 +468,7 @@ object Build {
           else List()
 
         val jarOpts = List(
+          "-Ddotty.tests.dottyCompilerManagedSources=" + (sourceManaged in Compile).value,
           "-Ddotty.tests.classes.dottyInterfaces=" + jars("dotty-interfaces"),
           "-Ddotty.tests.classes.dottyLibrary=" + jars("dotty-library"),
           "-Ddotty.tests.classes.dottyCompiler=" + jars("dotty-compiler"),
@@ -484,14 +485,32 @@ object Build {
 
       testCompilation := Def.inputTaskDyn {
         val args = spaceDelimited("<arg>").parsed
-        val updateCheckfile = args.contains("--update-checkfiles")
-        val fromTasty = args.contains("--from-tasty")
-        val args1 = if (updateCheckfile | fromTasty) args.filter(x => x != "--update-checkfiles" && x != "--from-tasty") else args
-        val test = if (fromTasty) "dotty.tools.dotc.FromTastyTests" else "dotty.tools.dotc.*CompilationTests"
-        val cmd = s" $test -- --exclude-categories=dotty.SlowTests" +
-          (if (updateCheckfile) " -Ddotty.tests.updateCheckfiles=TRUE" else "") +
-          (if (args1.nonEmpty) " -Ddotty.tests.filter=" + args1.mkString(" ") else "")
-        (testOnly in Test).toTask(cmd)
+        if (args.contains("--help")) {
+          println(
+            s"""
+               |usage: testCompilation [--help] [--from-tasty] [--update-checkfiles] [<filter>]
+               |
+               |By default runs tests in dotty.tools.dotc.*CompilationTests excluding tests tagged with dotty.SlowTests.
+               |
+               |  --help                show this message
+               |  --from-tasty          runs tests in dotty.tools.dotc.FromTastyTests
+               |  --update-checkfiles   override the checkfiles that did not match with the current output
+               |  <filter>              substring of the path of the tests file
+               |
+             """.stripMargin
+          )
+          (testOnly in Test).toTask(" not.a.test")
+        }
+        else {
+          val updateCheckfile = args.contains("--update-checkfiles")
+          val fromTasty = args.contains("--from-tasty")
+          val args1 = if (updateCheckfile | fromTasty) args.filter(x => x != "--update-checkfiles" && x != "--from-tasty") else args
+          val test = if (fromTasty) "dotty.tools.dotc.FromTastyTests" else "dotty.tools.dotc.*CompilationTests"
+          val cmd = s" $test -- --exclude-categories=dotty.SlowTests" +
+            (if (updateCheckfile) " -Ddotty.tests.updateCheckfiles=TRUE" else "") +
+            (if (args1.nonEmpty) " -Ddotty.tests.filter=" + args1.mkString(" ") else "")
+          (testOnly in Test).toTask(cmd)
+        }
       }.evaluated,
 
       dotr := {
@@ -668,19 +687,39 @@ object Build {
     case Bootstrapped => `dotty-library-bootstrapped`
   }
 
-  lazy val `dotty-sbt-bridge` = project.in(file("sbt-bridge")).
-    dependsOn(dottyCompiler(NonBootstrapped) % Provided).
+  lazy val `dotty-sbt-bridge` = project.in(file("sbt-bridge/src")).
+    // We cannot depend on any bootstrapped project to compile the bridge, since the
+    // bridge is needed to compile these projects.
     dependsOn(dottyDoc(NonBootstrapped) % Provided).
     settings(commonJavaSettings).
     settings(
       description := "sbt compiler bridge for Dotty",
-      libraryDependencies ++= Seq(
-        Dependencies.`compiler-interface` % Provided,
-        (Dependencies.`zinc-api-info` % Test).withDottyCompat(scalaVersion.value)
-      ),
+
+      sources in Test := Seq(),
+      scalaSource in Compile := baseDirectory.value,
+      javaSource  in Compile := baseDirectory.value,
+
+      // Referring to the other project using a string avoids an infinite loop
+      // when sbt reads the settings.
+      test in Test := (test in (LocalProject("dotty-sbt-bridge-tests"), Test)).value,
+
+      libraryDependencies += Dependencies.`compiler-interface` % Provided
+    )
+
+  // We use a separate project for the bridge tests since they can only be run
+  // with the bootstrapped library on the classpath.
+  lazy val `dotty-sbt-bridge-tests` = project.in(file("sbt-bridge/test")).
+    dependsOn(dottyCompiler(Bootstrapped) % Test).
+    settings(commonBootstrappedSettings).
+    settings(
+      sources in Compile := Seq(),
+      scalaSource in Test := baseDirectory.value,
+      javaSource  in Test := baseDirectory.value,
 
       fork in Test := true,
-      parallelExecution in Test := false
+      parallelExecution in Test := false,
+
+      libraryDependencies += (Dependencies.`zinc-api-info` % Test).withDottyCompat(scalaVersion.value)
     )
 
   lazy val `dotty-language-server` = project.in(file("language-server")).
@@ -754,6 +793,7 @@ object Build {
    */
   lazy val sjsSandbox = project.in(file("sandbox/scalajs")).
     enablePlugins(ScalaJSPlugin).
+    dependsOn(dottyLibrary(Bootstrapped)).
     settings(commonBootstrappedSettings).
     settings(
       /* Remove the Scala.js compiler plugin for scalac, and enable the
@@ -776,8 +816,7 @@ object Build {
       scalaJSLinkerConfig ~= {
         _.withCheckIR(true).withParallel(false)
       }
-    ).
-    settings(compileWithDottySettings)
+    )
 
   lazy val `dotty-bench` = project.in(file("bench")).asDottyBench(NonBootstrapped)
   lazy val `dotty-bench-bootstrapped` = project.in(file("bench")).asDottyBench(Bootstrapped)
@@ -928,7 +967,9 @@ object Build {
         (publishLocal in `dotty-compiler-bootstrapped`).value
         (publishLocal in `sbt-dotty`).value
         (publishLocal in `dotty-bootstrapped`).value
-        val pluginText = s"""addSbtPlugin("ch.epfl.lamp" % "sbt-dotty" % "$sbtDottyVersion")"""
+        val pluginText =
+          s"""updateOptions in Global ~= (_.withLatestSnapshots(false))
+             |addSbtPlugin("ch.epfl.lamp" % "sbt-dotty" % "$sbtDottyVersion")""".stripMargin
         IO.write(baseDirectory.value / "sbt-dotty-sbt", pluginText)
         IO.write(baseDirectory.value / "dotty-bootstrapped.version", dottyVersion)
       },
@@ -1024,102 +1065,6 @@ object Build {
       )
     )
   )
-
-  // Compile with dotty
-  lazy val compileWithDottySettings = {
-    inConfig(Compile)(inTask(compile)(Defaults.runnerTask) ++ Seq(
-      // Compile with dotty
-      fork in compile := true,
-
-      compile := {
-        val inputs = (compileInputs in compile).value
-        val inputOptions = inputs.options()
-        import inputOptions._
-
-        val s = streams.value
-        val logger = s.log
-        val cacheDir = s.cacheDirectory
-
-        // Discover classpaths
-
-        def cpToString(cp: Seq[File]) =
-          cp.map(_.getAbsolutePath).mkString(File.pathSeparator)
-
-        val compilerCp = Attributed.data((fullClasspath in (`dotty-compiler`, Compile)).value)
-        val cpStr = cpToString(classpath ++ compilerCp)
-
-        // List all my dependencies (recompile if any of these changes)
-
-        val allMyDependencies = classpath filterNot (_ == classesDirectory) flatMap { cpFile =>
-          if (cpFile.isDirectory) (cpFile ** "*.class").get
-          else Seq(cpFile)
-        }
-
-        // Compile
-
-        val run = (runner in compile).value
-        val cachedCompile = FileFunction.cached(cacheDir / "compile",
-            FilesInfo.lastModified, FilesInfo.exists) { dependencies =>
-
-          logger.info(
-              "Compiling %d Scala sources to %s..." format (
-              sources.size, classesDirectory))
-
-          if (classesDirectory.exists)
-            IO.delete(classesDirectory)
-          IO.createDirectory(classesDirectory)
-
-          val sourcesArgs = sources.map(_.getAbsolutePath()).toList
-
-          /* run.run() below in doCompile() will emit a call to its
-           * logger.info("Running dotty.tools.dotc.Main [...]")
-           * which we do not want to see. We use this patched logger to
-           * filter out that particular message.
-           */
-          val patchedLogger = new Logger {
-            def log(level: Level.Value, message: => String) = {
-              val msg = message
-              if (level != Level.Info ||
-                  !msg.startsWith("Running dotty.tools.dotc.Main"))
-                logger.log(level, msg)
-            }
-            def success(message: => String) = logger.success(message)
-            def trace(t: => Throwable) = logger.trace(t)
-          }
-
-          def doCompile(sourcesArgs: List[String]): Unit = {
-            run.run("dotty.tools.dotc.Main", compilerCp,
-                "-classpath" :: cpStr ::
-                "-d" :: classesDirectory.getAbsolutePath ::
-                scalacOptions ++:
-                sourcesArgs,
-                patchedLogger)
-          }
-
-          // Work around the Windows limitation on command line length.
-          val isWindows =
-            System.getProperty("os.name").toLowerCase().indexOf("win") >= 0
-          if ((fork in compile).value && isWindows &&
-              (sourcesArgs.map(_.length).sum > 1536)) {
-            IO.withTemporaryFile("sourcesargs", ".txt") { sourceListFile =>
-              IO.writeLines(sourceListFile, sourcesArgs)
-              doCompile(List("@"+sourceListFile.getAbsolutePath))
-            }
-          } else {
-            doCompile(sourcesArgs)
-          }
-
-          // Output is all files in classesDirectory
-          (classesDirectory ** AllPassFilter).get.toSet
-        }
-
-        cachedCompile((sources ++ allMyDependencies).toSet)
-
-        // We do not have dependency analysis when compiling externally
-        sbt.internal.inc.Analysis.Empty
-      }
-    ))
-  }
 
   lazy val commonDistSettings = Seq(
     packMain := Map(),
