@@ -407,7 +407,7 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
       ref(defn.DottyArraysModule).select(defn.newArrayMethod).withSpan(span)
 
     if (!ctx.erasedTypes) {
-      assert(!TypeErasure.isGeneric(elemTpe)) //needs to be done during typer. See Applications.convertNewGenericArray
+      assert(!TypeErasure.isGeneric(elemTpe), elemTpe) //needs to be done during typer. See Applications.convertNewGenericArray
       newArr.appliedToTypeTrees(TypeTree(returnTpe) :: Nil).appliedToArgs(clsOf(elemTpe) :: clsOf(returnTpe) :: dims :: Nil).withSpan(span)
     } else  // after erasure
       newArr.appliedToArgs(clsOf(elemTpe) :: clsOf(returnTpe) :: dims :: Nil).withSpan(span)
@@ -1175,6 +1175,24 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
     def unapply(tree: Tree): Option[(Tree, List[Tree])] = tree match {
       case TypeApply(tree, targs) => Some(tree, targs)
       case _ => Some(tree, Nil)
+    }
+  }
+
+  /** An extractor for typed splices */
+  object Splice {
+    def apply(tree: Tree)(implicit ctx: Context): Tree = {
+      val baseType = tree.tpe.baseType(defn.QuotedExprClass)
+      val argType =
+        if (baseType != NoType) baseType.argTypesHi.head
+        else {
+          assert(ctx.reporter.hasErrors)
+          defn.NothingType
+        }
+      ref(defn.InternalQuoted_exprSplice).appliedToType(argType).appliedTo(tree)
+    }
+    def unapply(tree: Tree)(implicit ctx: Context): Option[Tree] = tree match {
+      case Apply(fn, arg :: Nil) if fn.symbol == defn.InternalQuoted_exprSplice => Some(arg)
+      case _ => None
     }
   }
 

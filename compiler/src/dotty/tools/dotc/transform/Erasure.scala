@@ -326,8 +326,19 @@ object Erasure {
     }
 
     private def checkNotErased(tree: Tree)(implicit ctx: Context): tree.type = {
-      if (isErased(tree) && !ctx.mode.is(Mode.Type))
-        ctx.error(em"${tree.symbol} is declared as erased, but is in fact used", tree.sourcePos)
+      if (!ctx.mode.is(Mode.Type)) {
+        if (isErased(tree))
+          ctx.error(em"${tree.symbol} is declared as erased, but is in fact used", tree.sourcePos)
+        tree.symbol.getAnnotation(defn.CompileTimeOnlyAnnot) match {
+          case Some(annot) =>
+            def defaultMsg =
+              s"""Reference to ${tree.symbol.showLocated} should not have survived,
+                 |it should have been processed and eliminated during expansion of an enclosing macro or term erasure."""
+            val message = annot.argumentConstant(0).fold(defaultMsg)(_.stringValue)
+            ctx.error(message, tree.sourcePos)
+          case _ => // OK
+        }
+      }
       tree
     }
 
@@ -358,9 +369,13 @@ object Erasure {
     /** This override is only needed to semi-erase type ascriptions */
     override def typedTyped(tree: untpd.Typed, pt: Type)(implicit ctx: Context): Tree = {
       val Typed(expr, tpt) = tree
-      val tpt1 = promote(tpt)
-      val expr1 = typed(expr, tpt1.tpe)
-      assignType(untpd.cpy.Typed(tree)(expr1, tpt1), tpt1)
+      val tpt1 = tpt match {
+        case Block(_, tpt) => tpt // erase type aliases (statements) from type block
+        case tpt => tpt
+      }
+      val tpt2 = promote(tpt1)
+      val expr1 = typed(expr, tpt2.tpe)
+      assignType(untpd.cpy.Typed(tree)(expr1, tpt2), tpt2)
     }
 
     override def typedLiteral(tree: untpd.Literal)(implicit ctx: Context): Tree =

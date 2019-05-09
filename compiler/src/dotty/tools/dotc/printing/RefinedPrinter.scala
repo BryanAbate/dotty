@@ -78,7 +78,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
     if (ctx.settings.YdebugNames.value) name.debugString else NameTransformer.decodeIllegalChars(name.toString)
 
   override protected def simpleNameString(sym: Symbol): String =
-    nameString(if (ctx.property(XprintMode).isEmpty) sym.originalName else sym.name)
+    nameString(if (ctx.property(XprintMode).isEmpty) sym.initial.name else sym.name)
 
   override def fullNameString(sym: Symbol): String =
     if (isEmptyPrefix(sym.maybeOwner)) nameString(sym)
@@ -136,14 +136,14 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
             atPrec(InfixPrec) { argText(args.head) }
           else
             toTextTuple(args.init)
-        (keywordText("erased ") provided isErased) ~
         (keywordText("given ") provided isContextual) ~
+        (keywordText("erased ") provided isErased) ~
         argStr ~ " => " ~ argText(args.last)
       }
 
     def toTextDependentFunction(appType: MethodType): Text =
-      (keywordText("erased ") provided appType.isErasedMethod) ~
       (keywordText("given ") provided appType.isImplicitMethod) ~
+      (keywordText("erased ") provided appType.isErasedMethod) ~
       "(" ~ paramsText(appType) ~ ") => " ~ toText(appType.resultType)
 
     def isInfixType(tp: Type): Boolean = tp match {
@@ -179,7 +179,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
         val cls = tycon.typeSymbol
         if (tycon.isRepeatedParam) return toTextLocal(args.head) ~ "*"
         if (defn.isFunctionClass(cls)) return toTextFunction(args, cls.name.isImplicitFunction, cls.name.isErasedFunction)
-        if (tp.tupleArity >= 2) return toTextTuple(tp.tupleElementTypes)
+        if (tp.tupleArity >= 2 && !ctx.settings.YprintDebug.value) return toTextTuple(tp.tupleElementTypes)
         if (isInfixType(tp)) {
           val l :: r :: Nil = args
           val opName = tyconName(tycon)
@@ -194,7 +194,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
       case OrType(tp1, tp2) =>
         return toTextInfixType(tpnme.raw.BAR, tp1, tp2) { toText(tpnme.raw.BAR) }
 
-      case EtaExpansion(tycon) =>
+      case EtaExpansion(tycon) if !ctx.settings.YprintDebug.value =>
         return toText(tycon)
       case tp: RefinedType if defn.isFunctionType(tp) =>
         return toTextDependentFunction(tp.refinedInfo.asInstanceOf[MethodType])
@@ -232,7 +232,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
           case dummyTreeOfType(tp) :: Nil if !(tp isRef defn.NullClass) => "null: " ~ toText(tp)
           case _ => toTextGlobal(args, ", ")
         }
-        return "[applied to " ~ (Str("given ") provided tp.isContextual) ~ "(" ~ argsText ~ ") returning " ~ toText(resultType) ~ "]"
+        return "[applied to " ~ (Str("given ") provided tp.isContextual) ~ (Str("erased ") provided tp.isErasedMethod) ~ "(" ~ argsText ~ ") returning " ~ toText(resultType) ~ "]"
       case IgnoredProto(ignored) =>
         return "?" ~ (("(ignored: " ~ toText(ignored) ~ ")") provided ctx.settings.verbose.value)
       case tp @ PolyProto(targs, resType) =>
@@ -252,9 +252,15 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
     ("{" ~ toText(trees, "\n") ~ "}").close
 
   protected def typeApplyText[T >: Untyped](tree: TypeApply[T]): Text = {
-    val isQuote = tree.fun.hasType && tree.fun.symbol == defn.InternalQuoted_typeQuote
+    val isQuote = !ctx.settings.YprintDebug.value && tree.fun.hasType && tree.fun.symbol == defn.InternalQuoted_typeQuote
     val (open, close) = if (isQuote) (keywordStr("'["), keywordStr("]")) else ("[", "]")
-    toTextLocal(tree.fun).provided(!isQuote) ~ open ~ toTextGlobal(tree.args, ", ") ~ close
+    val funText = toTextLocal(tree.fun).provided(!isQuote)
+    tree.fun match {
+      case Select(New(tpt), nme.CONSTRUCTOR) if tpt.typeOpt.dealias.isInstanceOf[AppliedType] =>
+        funText  // type was already printed by toText(new)
+      case _ =>
+        funText ~ open ~ toTextGlobal(tree.args, ", ") ~ close
+    }
   }
 
   protected def toTextCore[T >: Untyped](tree: Tree[T]): Text = {
@@ -328,7 +334,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
         if (name.isTypeName) typeText(txt)
         else txt
       case tree @ Select(qual, name) =>
-        if (tree.hasType && tree.symbol == defn.QuotedType_splice) typeText("${") ~ toTextLocal(qual) ~ typeText("}")
+        if (!ctx.settings.YprintDebug.value && tree.hasType && tree.symbol == defn.QuotedType_splice) typeText("${") ~ toTextLocal(qual) ~ typeText("}")
         else if (qual.isType) toTextLocal(qual) ~ "#" ~ typeText(toText(name))
         else toTextLocal(qual) ~ ("." ~ nameIdText(tree) provided (name != nme.CONSTRUCTOR || ctx.settings.YprintDebug.value))
       case tree: This =>
@@ -340,9 +346,9 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
           changePrec (GlobalPrec) {
             keywordStr("throw ") ~ toText(args.head)
           }
-        else if (fun.hasType && fun.symbol == defn.InternalQuoted_exprQuote)
+        else if (!ctx.settings.YprintDebug.value && fun.hasType && fun.symbol == defn.InternalQuoted_exprQuote)
           keywordStr("'{") ~ toTextGlobal(args, ", ") ~ keywordStr("}")
-        else if (fun.hasType && fun.symbol == defn.InternalQuoted_exprSplice)
+        else if (!ctx.settings.YprintDebug.value && fun.hasType && fun.symbol == defn.InternalQuoted_exprSplice)
           keywordStr("${") ~ toTextGlobal(args, ", ") ~ keywordStr("}")
         else
           toTextLocal(fun) ~ "(" ~ toTextGlobal(args, ", ") ~ ")"
@@ -523,10 +529,12 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
       case Function(args, body) =>
         var implicitSeen: Boolean = false
         var contextual: Boolean = false
+        var isErased: Boolean = false
         def argToText(arg: Tree) = arg match {
           case arg @ ValDef(name, tpt, _) =>
             val implicitText =
               if ((arg.mods is Given)) { contextual = true; "" }
+              else if ((arg.mods is Erased)) { isErased = true; "" }
               else if ((arg.mods is Implicit) && !implicitSeen) { implicitSeen = true; keywordStr("implicit ") }
               else ""
             implicitText ~ toText(name) ~ optAscription(tpt)
@@ -539,6 +547,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
         }
         changePrec(GlobalPrec) {
 		  (keywordText("given ") provided contextual) ~
+		  (keywordText("erased ") provided isErased) ~
           argsText ~ " => " ~ toText(body)
         }
       case InfixOp(l, op, r) =>

@@ -48,9 +48,12 @@ class ReplCompiler extends Compiler {
       def importPreviousRun(id: Int)(implicit ctx: Context) = {
         // we first import the wrapper object id
         val path = nme.EMPTY_PACKAGE ++ "." ++ objectNames(id)
-        val importInfo = ImportInfo.rootImport(() =>
-          ctx.requiredModuleRef(path))
-        val ctx0 = ctx.fresh.setNewScope.setImportInfo(importInfo)
+        def importWrapper(c: Context, importImplied: Boolean) = {
+          val importInfo = ImportInfo.rootImport(() =>
+            c.requiredModuleRef(path), importImplied)
+          c.fresh.setNewScope.setImportInfo(importInfo)
+        }
+        val ctx0 = importWrapper(importWrapper(ctx, false), true)
 
         // then its user defined imports
         val imports = state.imports.getOrElse(id, Nil)
@@ -238,7 +241,7 @@ class ReplCompiler extends Compiler {
         PackageDef(Ident(nme.EMPTY_PACKAGE), List(wrapper))
       }
 
-      ParseResult(expr)(state) match {
+      ParseResult(sourceFile)(state) match {
         case Parsed(_, trees) =>
           wrap(trees).result
         case SyntaxErrors(_, reported, trees) =>

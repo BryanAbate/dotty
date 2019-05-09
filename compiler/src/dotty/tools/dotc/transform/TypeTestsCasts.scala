@@ -92,7 +92,12 @@ object TypeTestsCasts {
 
     def isClassDetermined(X: Type, P: AppliedType)(implicit ctx: Context) = {
       val AppliedType(tycon, _) = P
-      val typeLambda = tycon.ensureLambdaSub.asInstanceOf[TypeLambda]
+
+      def underlyingLambda(tp: Type): TypeLambda = tp.ensureLambdaSub match {
+        case tp: TypeLambda => tp
+        case tp: TypeProxy => underlyingLambda(tp.superType)
+      }
+      val typeLambda = underlyingLambda(tycon)
       val tvars = constrained(typeLambda, untpd.EmptyTree, alwaysAddTypeVars = true)._2.map(_.tpe)
       val P1 = tycon.appliedTo(tvars)
 
@@ -215,7 +220,7 @@ object TypeTestsCasts {
 
           if (expr.tpe <:< testType)
             if (expr.tpe.isNotNull) {
-              ctx.warning(TypeTestAlwaysSucceeds(foundCls, testCls), tree.sourcePos)
+              if (!inMatch) ctx.warning(TypeTestAlwaysSucceeds(foundCls, testCls), tree.sourcePos)
               constant(expr, Literal(Constant(true)))
             }
             else expr.testNotNull
@@ -234,6 +239,10 @@ object TypeTestsCasts {
           def testCls = testType.widen.classSymbol
           if (expr.tpe <:< testType)
             Typed(expr, tree.args.head)
+          else if (testCls eq defn.BoxedUnitClass) {
+            // as a special case, casting to Unit always successfully returns Unit
+            Block(expr :: Nil, Literal(Constant(()))).withSpan(expr.span)
+          }
           else if (foundCls.isPrimitiveValueClass) {
             if (testCls.isPrimitiveValueClass) primitiveConversion(expr, testCls)
             else derivedTree(box(expr), defn.Any_asInstanceOf, testType)

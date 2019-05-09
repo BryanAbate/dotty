@@ -24,7 +24,7 @@ To provide reflection capabilities in macros we need to add an implicit paramete
 import scala.quoted._
 import scala.tasty._
 
-inline def natConst(x: Int): Int = ~natConstImpl('x)
+inline def natConst(x: => Int): Int = ${natConstImpl('{x})}
 
 def natConstImpl(x: Expr[Int])(implicit reflection: Reflection): Expr[Int] = {
   import reflection._
@@ -42,10 +42,10 @@ def natConstImpl(x: Expr[Int])(implicit reflection: Reflection): Expr[Int] = {
   xTree match {
     case Term.Literal(Constant.Int(n)) =>
       if (n <= 0)
-        throw new QuoteError("Parameter must be natural number")
+        QuoteError("Parameter must be natural number")
       n.toExpr
     case _ =>
-      throw new QuoteError("Parameter must be a known constant")
+      QuoteError("Parameter must be a known constant")
   }
 }
 ```
@@ -119,7 +119,7 @@ TASTy Reflect provides the following types:
          +- TypeTree ----+- Inferred
          |               +- TypeIdent
          |               +- TypeSelect
-         |               +- Project
+         |               +- Projection
          |               +- Singleton
          |               +- Refined
          |               +- Applied
@@ -139,6 +139,7 @@ TASTy Reflect provides the following types:
              +- Unapply
              +- Alternative
              +- TypeTest
+             +- WildcardPattern
 
 
                  +- NoPrefix

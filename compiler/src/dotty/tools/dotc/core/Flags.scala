@@ -592,8 +592,8 @@ object Flags {
   /** Assumed to be pure */
   final val StableOrErased: FlagSet = StableRealizable | Erased
 
-  /** Labeled `private`, `final`, or `inline` */
-  final val EffectivelyFinal: FlagSet = Private | Final | Inline
+  /** Labeled `private`, or `final` */
+  final val EffectivelyFinal: FlagSet = Private | Final
 
   /** A private method */
   final val PrivateMethod: FlagConjunction = allOf(Private, Method)
@@ -660,9 +660,6 @@ object Flags {
 
   /** Is a default parameter in Scala 2*/
   final val DefaultParameter: FlagConjunction = allOf(Param, DefaultParameterized)
-
-  /** A Scala 2 Macro */
-  final val Scala2Macro: FlagConjunction = allOf(Macro, Scala2x)
 
   /** A trait that does not need to be initialized */
   final val NoInitsTrait: FlagConjunction = allOf(Trait, NoInits)

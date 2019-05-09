@@ -16,13 +16,17 @@ import ProtoTypes._
 import Scopes._
 import CheckRealizable._
 import ErrorReporting.errorTree
+import rewrites.Rewrites.patch
+import util.Spans.Span
 
 import util.SourcePosition
 import transform.SymUtils._
 import Decorators._
 import ErrorReporting.{err, errorType}
-import config.Printers.typr
+import config.Printers.{typr, patmatch}
 import NameKinds.DefaultGetterName
+import Applications.unapplyArgs
+import transform.patmat.SpaceEngine.isIrrefutableUnapply
 
 import collection.mutable
 import SymDenotations.{NoCompleter, NoDenotation}
@@ -594,6 +598,53 @@ trait Checking {
       ctx.error(ex"$cls cannot be instantiated since it${rstatus.msg}", pos)
   }
 
+  /** Check that pattern `pat` is irrefutable for scrutinee tye `pt`.
+   *  This means `pat` is either marked @unchecked or `pt` conforms to the
+   *  pattern's type. If pattern is an UnApply, do the check recursively.
+   */
+  def checkIrrefutable(pat: Tree, pt: Type)(implicit ctx: Context): Boolean = {
+    patmatch.println(i"check irrefutable $pat: ${pat.tpe} against $pt")
+
+    def fail(pat: Tree, pt: Type): Boolean = {
+      ctx.errorOrMigrationWarning(
+        ex"""pattern's type ${pat.tpe} is more specialized than the right hand side expression's type ${pt.dropAnnot(defn.UncheckedAnnot)}
+            |
+            |If the narrowing is intentional, this can be communicated by writing `: @unchecked` after the full pattern.${err.rewriteNotice}""",
+        pat.sourcePos)
+      false
+    }
+
+    def check(pat: Tree, pt: Type): Boolean = (pt <:< pat.tpe) || fail(pat, pt)
+
+    !ctx.settings.strict.value || // only in -strict mode for now since mitigations work only after this PR
+    pat.tpe.widen.hasAnnotation(defn.UncheckedAnnot) || {
+      pat match {
+        case Bind(_, pat1) =>
+          checkIrrefutable(pat1, pt)
+        case UnApply(fn, _, pats) =>
+          check(pat, pt) &&
+          (isIrrefutableUnapply(fn) || fail(pat, pt)) && {
+            val argPts = unapplyArgs(fn.tpe.widen.finalResultType, fn, pats, pat.sourcePos)
+            pats.corresponds(argPts)(checkIrrefutable)
+          }
+        case Alternative(pats) =>
+          pats.forall(checkIrrefutable(_, pt))
+        case Typed(arg, tpt) =>
+          check(pat, pt) && checkIrrefutable(arg, pt)
+        case Ident(nme.WILDCARD) =>
+          true
+        case _ =>
+          check(pat, pt)
+      }
+    }
+  }
+
+  /** Check that `path` is a legal prefix for an import or export clause */
+  def checkLegalImportPath(path: Tree)(implicit ctx: Context): Unit = {
+    checkStable(path.tpe, path.sourcePos)
+    if (!ctx.isAfterTyper) Checking.checkRealizable(path.tpe, path.posd)
+  }
+
  /**  Check that `tp` is a class type.
   *   Also, if `traitReq` is true, check that `tp` is a trait.
   *   Also, if `stablePrefixReq` is true and phase is not after RefChecks,
@@ -617,7 +668,7 @@ trait Checking {
   def checkImplicitConversionDefOK(sym: Symbol)(implicit ctx: Context): Unit = {
     def check(): Unit = {
       checkFeature(
-        defn.LanguageModuleClass, nme.implicitConversions,
+        nme.implicitConversions,
         i"Definition of implicit conversion $sym",
         ctx.owner.topLevelClass,
         sym.sourcePos)
@@ -654,20 +705,17 @@ trait Checking {
         defn.isPredefClass(conv.owner) ||
         conv.name == nme.reflectiveSelectable && conv.maybeOwner.maybeOwner.maybeOwner == defn.ScalaPackageClass
       if (!conversionOK)
-        checkFeature(defn.LanguageModuleClass, nme.implicitConversions,
+        checkFeature(nme.implicitConversions,
           i"Use of implicit conversion ${conv.showLocated}", NoSymbol, posd.sourcePos)
     }
 
   /** Issue a feature warning if feature is not enabled */
-  def checkFeature(base: ClassSymbol,
-                   name: TermName,
+  def checkFeature(name: TermName,
                    description: => String,
                    featureUseSite: Symbol,
                    pos: SourcePosition)(implicit ctx: Context): Unit =
-    if (!ctx.featureEnabled(base, name))
-      ctx.featureWarning(name.toString, description,
-        isScala2Feature = base.isContainedIn(defn.LanguageModuleClass),
-        featureUseSite, required = false, pos)
+    if (!ctx.featureEnabled(name))
+      ctx.featureWarning(name.toString, description, featureUseSite, required = false, pos)
 
   /** Check that `tp` is a class type and that any top-level type arguments in this type
    *  are feasible, i.e. that their lower bound conforms to their upper bound. If a type
@@ -703,6 +751,8 @@ trait Checking {
       case _ =>
         tree match {
           case Typed(expr, _) =>
+            checkInlineConformant(expr, isFinal, what)
+          case Inlined(_, Nil, expr) =>
             checkInlineConformant(expr, isFinal, what)
           case SeqLiteral(elems, _) =>
             elems.foreach(elem => checkInlineConformant(elem, isFinal, what))
@@ -818,11 +868,6 @@ trait Checking {
         // needed to make pos/java-interop/t1196 work.
       errorTree(tpt, MissingTypeParameterFor(tpt.tpe))
     }
-    else tpt
-
-  /** Check that `tpt` does not refer to a singleton type */
-  def checkNotSingleton(tpt: Tree, where: String)(implicit ctx: Context): Tree =
-    if (tpt.tpe.isSingleton) errorTree(tpt, ex"Singleton type ${tpt.tpe} is not allowed $where")
     else tpt
 
   /** Verify classes extending AnyVal meet the requirements */
@@ -1041,12 +1086,11 @@ trait NoChecking extends ReChecking {
   override def checkNoDoubleDeclaration(cls: Symbol)(implicit ctx: Context): Unit = ()
   override def checkParentCall(call: Tree, caller: ClassSymbol)(implicit ctx: Context): Unit = ()
   override def checkSimpleKinded(tpt: Tree)(implicit ctx: Context): Tree = tpt
-  override def checkNotSingleton(tpt: Tree, where: String)(implicit ctx: Context): Tree = tpt
   override def checkDerivedValueClass(clazz: Symbol, stats: List[Tree])(implicit ctx: Context): Unit = ()
   override def checkTraitInheritance(parentSym: Symbol, cls: ClassSymbol, pos: SourcePosition)(implicit ctx: Context): Unit = ()
   override def checkCaseInheritance(parentSym: Symbol, caseCls: ClassSymbol, pos: SourcePosition)(implicit ctx: Context): Unit = ()
   override def checkNoForwardDependencies(vparams: List[ValDef])(implicit ctx: Context): Unit = ()
   override def checkMembersOK(tp: Type, pos: SourcePosition)(implicit ctx: Context): Type = tp
   override def checkInInlineContext(what: String, posd: Positioned)(implicit ctx: Context): Unit = ()
-  override def checkFeature(base: ClassSymbol, name: TermName, description: => String, featureUseSite: Symbol, pos: SourcePosition)(implicit ctx: Context): Unit = ()
+  override def checkFeature(name: TermName, description: => String, featureUseSite: Symbol, pos: SourcePosition)(implicit ctx: Context): Unit = ()
 }

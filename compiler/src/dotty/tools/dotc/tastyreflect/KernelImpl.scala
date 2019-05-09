@@ -1,6 +1,7 @@
 package dotty.tools.dotc
 package tastyreflect
 
+import dotty.tools.dotc.ast.Trees.SeqLiteral
 import dotty.tools.dotc.ast.{Trees, tpd, untpd}
 import dotty.tools.dotc.ast.tpd.TreeOps
 import dotty.tools.dotc.typer.Typer
@@ -31,6 +32,12 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
   def Context_owner(self: Context): Symbol = self.owner
 
   def Context_source(self: Context): java.nio.file.Path = self.compilationUnit.source.file.jpath
+
+  def Context_printColors(self: Context): Boolean = self.settings.color.value(self) == "always"
+
+  def Context_withColors(self: Context): Context = ctx.fresh.setSetting(ctx.settings.color, "always")
+
+  def Context_withoutColors(self: Context): Context = ctx.fresh.setSetting(ctx.settings.color, "never")
 
   //
   // REPORTING
@@ -238,6 +245,11 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
   def Term_underlying(self: Term)(implicit ctx: Context): Term = self.underlying
 
   type Ref = tpd.RefTree
+
+  def matchRef(tree: Tree)(implicit ctx: Context): Option[Ref] = tree match {
+    case x: tpd.RefTree if x.isTerm => Some(x)
+    case _ => None
+  }
 
   def Ref_apply(sym: Symbol)(implicit ctx: Context): Ref =
     withDefaultPos(ctx => tpd.ref(sym)(ctx).asInstanceOf[tpd.RefTree])
@@ -911,7 +923,7 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
 
   def matchPattern_Value(pattern: Pattern): Option[Value] = pattern match {
     case lit: tpd.Literal => Some(lit)
-    case ref: tpd.RefTree if ref.isTerm => Some(ref)
+    case ref: tpd.RefTree if ref.isTerm && !tpd.isWildcardArg(ref) => Some(ref)
     case ths: tpd.This => Some(ths)
     case _ => None
   }
@@ -994,6 +1006,18 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
   def Pattern_TypeTest_module_copy(original: TypeTest)(tpt: TypeTree)(implicit ctx: Context): TypeTest =
     tpd.cpy.Typed(original)(untpd.Ident(nme.WILDCARD).withSpan(original.span).withType(tpt.tpe), tpt)
 
+  type WildcardPattern = tpd.Ident
+
+  def matchPattern_WildcardPattern(pattern: Pattern)(implicit ctx: Context): Option[WildcardPattern] = {
+    pattern match {
+      case pattern: tpd.Ident if tpd.isWildcardArg(pattern) => Some(pattern)
+      case _ => None
+    }
+  }
+
+  def Pattern_WildcardPattern_module_apply(tpe: TypeOrBounds)(implicit ctx: Context): WildcardPattern =
+    untpd.Ident(nme.WILDCARD).withType(tpe)
+
   //
   // TYPES
   //
@@ -1049,6 +1073,9 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
 
   def Type_memberType(self: Type)(member: Symbol)(implicit ctx: Context): Type =
     member.info.asSeenFrom(self, member.owner)
+
+  def Type_derivesFrom(self: Type)(cls: ClassDefSymbol)(implicit ctx: Context): Boolean =
+    self.derivesFrom(cls)
 
   type ConstantType = Types.ConstantType
 
@@ -1642,6 +1669,7 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
   /** Intersection of the two flag sets */
   def Flags_and(self: Flags)(that: Flags): Flags = self & that
 
+  def Flags_EmptyFlags: Flags = core.Flags.EmptyFlags
   def Flags_Private: Flags = core.Flags.Private
   def Flags_Protected: Flags = core.Flags.Protected
   def Flags_Abstract: Flags = core.Flags.Abstract
@@ -1649,6 +1677,7 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
   def Flags_Sealed: Flags = core.Flags.Sealed
   def Flags_Case: Flags = core.Flags.Case
   def Flags_Implicit: Flags = core.Flags.Implicit
+  def Flags_Given: Flags = core.Flags.Given
   def Flags_Implied: Flags = core.Flags.Implied
   def Flags_Erased: Flags = core.Flags.Erased
   def Flags_Lazy: Flags = core.Flags.Lazy
@@ -1681,19 +1710,16 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
   // QUOTED SEAL/UNSEAL
   //
 
-  /** View this expression `Expr[_]` as a `Term` */
+  /** View this expression `quoted.Expr[_]` as a `Term` */
   def QuotedExpr_unseal(self: scala.quoted.Expr[_])(implicit ctx: Context): Term =
     PickledQuotes.quotedExprToTree(self)
 
-  /** View this expression `Type[T]` as a `TypeTree` */
+  /** View this expression `quoted.Type[_]` as a `TypeTree` */
   def QuotedType_unseal(self: scala.quoted.Type[_])(implicit ctx: Context): TypeTree =
     PickledQuotes.quotedTypeToTree(self)
 
-  /** Convert `Term` to an `Expr[T]` and check that it conforms to `T` */
-  def QuotedExpr_seal[T](self: Term)(tpe: scala.quoted.Type[T])(implicit ctx: Context): scala.quoted.Expr[T] = {
-
-    val expectedType = QuotedType_unseal(tpe).tpe
-
+  /** Convert `Term` to an `quoted.Expr[Any]`  */
+  def QuotedExpr_seal(self: Term)(implicit ctx: Context): scala.quoted.Expr[Any] = {
     def etaExpand(term: Term): Term = term.tpe.widen match {
       case mtpe: Types.MethodType if !mtpe.isParamDependent =>
         val closureResType = mtpe.resType match {
@@ -1705,20 +1731,25 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
         tpd.Closure(closureMethod, tss => etaExpand(new tpd.TreeOps(term).appliedToArgs(tss.head)))
       case _ => term
     }
+    new scala.quoted.Exprs.TastyTreeExpr(etaExpand(self))
+  }
 
-    val expanded = etaExpand(self)
-    if (expanded.tpe <:< expectedType) {
-      new scala.quoted.Exprs.TastyTreeExpr(expanded).asInstanceOf[scala.quoted.Expr[T]]
+  /** Checked cast to a `quoted.Expr[U]` */
+  def QuotedExpr_cast[U](self: scala.quoted.Expr[_])(implicit tp: scala.quoted.Type[U], ctx: Context): scala.quoted.Expr[U] = {
+    val tree = QuotedExpr_unseal(self)
+    val expectedType = QuotedType_unseal(tp).tpe
+    if (tree.tpe <:< expectedType) {
+      self.asInstanceOf[scala.quoted.Expr[U]]
     } else {
-      throw new scala.tasty.TastyTypecheckError(
-        s"""Term: ${self.show}
+      throw new scala.tasty.reflect.ExprCastError(
+        s"""Expr: ${tree.show}
            |did not conform to type: ${expectedType.show}
            |""".stripMargin
       )
     }
   }
 
-  /** Convert `Type` to an `quoted.Type[T]` */
+  /** Convert `Type` to an `quoted.Type[_]` */
   def QuotedType_seal(self: Type)(implicit ctx: Context): scala.quoted.Type[_] = {
     val dummySpan = ctx.owner.span // FIXME
     new scala.quoted.Types.TreeType(tpd.TypeTree(self).withSpan(dummySpan))
@@ -1727,6 +1758,8 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
   //
   // DEFINITIONS
   //
+
+  // Symbols
 
   def Definitions_RootPackage: Symbol = defn.RootPackage
   def Definitions_RootClass: Symbol = defn.RootClass
@@ -1765,7 +1798,7 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
   def Definitions_Array_length: Symbol = defn.Array_length.asTerm
   def Definitions_Array_update: Symbol = defn.Array_update.asTerm
 
-  def Definitions_RepeatedParamClass: Symbol = defn.RepeatedParamClass
+  def Definitions_RepeatedParamClass: ClassDefSymbol = defn.RepeatedParamClass
 
   def Definitions_OptionClass: Symbol = defn.OptionClass
   def Definitions_NoneModule: Symbol = defn.NoneClass.companionModule.asTerm
@@ -1775,6 +1808,11 @@ class KernelImpl(val rootContext: core.Contexts.Context, val rootPosition: util.
   def Definitions_FunctionClass(arity: Int, isImplicit: Boolean, isErased: Boolean): Symbol =
     defn.FunctionClass(arity, isImplicit, isErased).asClass
   def Definitions_TupleClass(arity: Int): Symbol = defn.TupleType(arity).classSymbol.asClass
+
+  def Definitions_InternalQuoted_patternHole: Symbol = defn.InternalQuoted_patternHole
+  def Definitions_InternalQuoted_patternBindHoleAnnot: Symbol = defn.InternalQuoted_patternBindHoleAnnot
+
+  // Types
 
   def Definitions_UnitType: Type = defn.UnitType
   def Definitions_ByteType: Type = defn.ByteType

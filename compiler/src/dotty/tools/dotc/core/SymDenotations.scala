@@ -19,6 +19,7 @@ import reporting.diagnostic.Message
 import reporting.diagnostic.messages.BadSymbolicReference
 import reporting.trace
 import collection.mutable
+import transform.TypeUtils._
 
 import scala.annotation.internal.sharable
 
@@ -395,8 +396,11 @@ object SymDenotations {
         // need to use initial owner to disambiguate, as multiple private symbols with the same name
         // might have been moved from different origins into the same class
 
-    /** The name with which the denoting symbol was created */
+    /** The effective name with which the denoting symbol was created */
     final def originalName(implicit ctx: Context): Name = initial.effectiveName
+
+    /** The owner with which the denoting symbol was created. */
+    final def originalOwner(implicit ctx: Context): Symbol = initial.maybeOwner
 
     /** The encoded full path name of this denotation, where outer names and inner names
      *  are separated by `separator` strings as indicated by the given name kind.
@@ -802,10 +806,13 @@ object SymDenotations {
     def isSkolem: Boolean = name == nme.SKOLEM
 
     def isInlineMethod(implicit ctx: Context): Boolean =
-      is(InlineMethod, butNot = AccessorOrSynthetic) &&
+      is(InlineMethod, butNot = Accessor) &&
       name != nme.unapply  // unapply methods do not count as inline methods
                            // we need an inline flag on them only do that
                            // reduceProjection gets access to their rhs
+
+    /** Is this a Scala 2 macro */
+    final def isScala2Macro(implicit ctx: Context): Boolean = is(Macro) && symbol.owner.is(Scala2x)
 
     /** An erased value or an inline method, excluding @forceInline annotated methods.
      *  The latter have to be kept around to get to parity with Scala.
@@ -1079,17 +1086,10 @@ object SymDenotations {
      *  containing object.
      */
     def opaqueAlias(implicit ctx: Context): Type = {
-      if (isOpaqueHelper) {
+      if (isOpaqueHelper)
         owner.asClass.classInfo.selfType match {
-          case RefinedType(_, _, TypeBounds(lo, _)) =>
-            def extractAlias(tp: Type): Type = tp match {
-              case OrType(alias, _) => alias
-              case HKTypeLambda(tparams, tp) =>
-                HKTypeLambda(tparams.map(_.paramInfo), extractAlias(tp))
-            }
-            extractAlias(lo)
+          case RefinedType(_, _, bounds) => bounds.extractOpaqueAlias
         }
-      }
       else NoType
     }
 
@@ -1754,9 +1754,11 @@ object SymDenotations {
           Stats.record("computeBaseType, total")
           Stats.record(s"computeBaseType, ${tp.getClass}")
         }
+        val normed = tp.tryNormalize
+        if (normed.exists) return recur(normed)
+
         tp match {
           case tp @ TypeRef(prefix, _) =>
-
             def foldGlb(bt: Type, ps: List[Type]): Type = ps match {
               case p :: ps1 => foldGlb(bt & recur(p), ps1)
               case _ => bt
@@ -1797,7 +1799,6 @@ object SymDenotations {
             computeTypeRef
 
           case tp @ AppliedType(tycon, args) =>
-
             def computeApplied = {
               btrCache.put(tp, NoPrefix)
               val baseTp =
@@ -1815,8 +1816,8 @@ object SymDenotations {
 
           case tp: TypeParamRef =>  // uncachable, since baseType depends on context bounds
             recur(ctx.typeComparer.bounds(tp).hi)
-          case tp: TypeProxy =>
 
+          case tp: TypeProxy =>
             def computeTypeProxy = {
               val superTp = tp.superType
               val baseTp = recur(superTp)
@@ -1830,7 +1831,6 @@ object SymDenotations {
             computeTypeProxy
 
           case tp: AndOrType =>
-
             def computeAndOrType = {
               val tp1 = tp.tp1
               val tp2 = tp.tp2
@@ -1854,6 +1854,7 @@ object SymDenotations {
 
           case JavaArrayType(_) if symbol == defn.ObjectClass =>
             this.typeRef
+
           case _ =>
             NoType
         }

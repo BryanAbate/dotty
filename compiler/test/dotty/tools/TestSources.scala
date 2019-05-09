@@ -18,25 +18,17 @@ object TestSources {
   // pos tests lists
 
   def posFromTastyBlacklistFile: String = "compiler/test/dotc/pos-from-tasty.blacklist"
-  def posDecompilationBlacklistFile: String = "compiler/test/dotc/pos-decompilation.blacklist"
-  def posRecompilationWhitelistFile: String = "compiler/test/dotc/pos-recompilation.whitelist"
   def posTestPicklingBlacklistFile: String = "compiler/test/dotc/pos-test-pickling.blacklist"
 
   def posFromTastyBlacklisted: List[String] = loadList(posFromTastyBlacklistFile)
-  def posDecompilationBlacklisted: List[String] = loadList(posDecompilationBlacklistFile)
-  def posRecompilationWhitelist: List[String] = loadList(posRecompilationWhitelistFile)
   def posTestPicklingBlacklisted: List[String] = loadList(posTestPicklingBlacklistFile)
 
   // run tests lists
 
   def runFromTastyBlacklistFile: String = "compiler/test/dotc/run-from-tasty.blacklist"
-  def runDecompilationBlacklistFile: String = "compiler/test/dotc/run-decompilation.blacklist"
-  def runRecompilationWhitelistFile: String = "compiler/test/dotc/run-recompilation.whitelist"
   def runTestPicklingBlacklistFile: String = "compiler/test/dotc/run-test-pickling.blacklist"
 
   def runFromTastyBlacklisted: List[String] = loadList(runFromTastyBlacklistFile)
-  def runDecompilationBlacklisted: List[String] = loadList(runDecompilationBlacklistFile)
-  def runRecompilationWhitelist: List[String] = loadList(runRecompilationWhitelistFile)
   def runTestPicklingBlacklisted: List[String] = loadList(runTestPicklingBlacklistFile)
 
   // load lists
@@ -51,7 +43,9 @@ object TestSources {
       .filter(_.nonEmpty)
       .toList
 
-    assert(list.nonEmpty)
+    if (list.isEmpty)
+      println(s"$path is empty")
+
     list
   }
 
@@ -73,7 +67,6 @@ object TestSources {
         .map(_.toString)
         .toList
 
-      assert(sources.nonEmpty)
       sources
     }
     finally files.close()

@@ -549,7 +549,7 @@ object Types {
      *  flags and no `excluded` flag and produce a denotation that contains
      *  the type of the member as seen from given prefix `pre`.
      */
-    final def findMember(name: Name, pre: Type, required: FlagConjunction, excluded: FlagSet)(implicit ctx: Context): Denotation = {
+    final def findMember(name: Name, pre: Type, required: FlagConjunction = EmptyFlagConjunction, excluded: FlagSet = EmptyFlags)(implicit ctx: Context): Denotation = {
       @tailrec def go(tp: Type): Denotation = tp match {
         case tp: TermRef =>
           go (tp.underlying match {
@@ -1033,7 +1033,8 @@ object Types {
       case _ => this
     }
 
-    /** If this type contains embedded union types, replace them by their joins.
+    /** Widen this type and if the result contains embedded union types, replace
+     *  them by their joins.
      *  "Embedded" means: inside intersectons or recursive types, or in prefixes of refined types.
      *  If an embedded union is found, we first try to simplify or eliminate it by
      *  re-lubbing it while allowing type parameters to be constrained further.
@@ -1046,7 +1047,7 @@ object Types {
      *  is approximated by constraining `A` to be =:= to `Int` and returning `ArrayBuffer[Int]`
      *  instead of `ArrayBuffer[_ >: Int | A <: Int & A]`
      */
-    def widenUnion(implicit ctx: Context): Type = this match {
+    def widenUnion(implicit ctx: Context): Type = widen match {
       case OrType(tp1, tp2) =>
         ctx.typeComparer.lub(tp1.widenUnion, tp2.widenUnion, canConstrain = true) match {
           case union: OrType => union.join
@@ -1058,8 +1059,50 @@ object Types {
         tp.derivedRefinedType(tp.parent.widenUnion, tp.refinedName, tp.refinedInfo)
       case tp: RecType =>
         tp.rebind(tp.parent.widenUnion)
+      case tp =>
+        tp
+    }
+
+    /** Widen all top-level singletons reachable by dealiasing
+     *  and going to the operands of & and |.
+     *  Overridden and cached in OrType.
+     */
+    def widenSingletons(implicit ctx: Context): Type = dealias match {
+      case tp: SingletonType =>
+        tp.widen
+      case tp: OrType =>
+        val tp1w = tp.widenSingletons
+        if (tp1w eq tp) this else tp1w
+      case tp: AndType =>
+        val tp1w = tp.tp1.widenSingletons
+        val tp2w = tp.tp2.widenSingletons
+        if ((tp.tp1 eq tp1w) && (tp.tp2 eq tp2w)) this else tp1w & tp2w
       case _ =>
         this
+    }
+
+    /** If this type is an alias of a disjunction of stable singleton types,
+     *  these types as a set, otherwise the empty set.
+     *  Overridden and cached in OrType.
+     */
+    def atoms(implicit ctx: Context): Set[Type] = dealias match {
+      case tp: SingletonType if tp.isStable =>
+        def normalize(tp: Type): Type = tp match {
+          case tp: SingletonType =>
+            tp.underlying.dealias match {
+              case tp1: SingletonType => normalize(tp1)
+              case _ =>
+                tp match {
+                  case tp: TermRef => tp.derivedSelect(normalize(tp.prefix))
+                  case _ => tp
+                }
+            }
+          case _ => tp
+        }
+        Set.empty + normalize(tp)
+      case tp: OrType => tp.atoms
+      case tp: AndType => tp.tp1.atoms & tp.tp2.atoms
+      case _ => Set.empty
     }
 
     private def dealias1(keep: AnnotatedType => Context => Boolean)(implicit ctx: Context): Type = this match {
@@ -1484,6 +1527,17 @@ object Types {
      *   is improved using an OO scheme).
      */
     def signature(implicit ctx: Context): Signature = Signature.NotAMethod
+
+    /** Drop annotation of given `cls` from this type */
+    def dropAnnot(cls: Symbol)(implicit ctx: Context): Type = stripTypeVar match {
+      case self @ AnnotatedType(pre, annot) =>
+        if (annot.symbol eq cls) pre
+        else self.derivedAnnotatedType(pre.dropAnnot(cls), annot)
+      case _ =>
+        this
+    }
+
+    def dropRepeatedAnnot(implicit ctx: Context): Type = dropAnnot(defn.RepeatedAnnot)
 
     def annotatedToRepeated(implicit ctx: Context): Type = this match {
       case tp @ ExprType(tp1) => tp.derivedExprType(tp1.annotatedToRepeated)
@@ -2770,6 +2824,31 @@ object Types {
       myJoin
     }
 
+    private[this] var atomsRunId: RunId = NoRunId
+    private[this] var myAtoms: Set[Type] = _
+    private[this] var myWidened: Type = _
+
+    private def ensureAtomsComputed()(implicit ctx: Context): Unit =
+      if (atomsRunId != ctx.runId) {
+        val atoms1 = tp1.atoms
+        val atoms2 = tp2.atoms
+        myAtoms = if (atoms1.nonEmpty && atoms2.nonEmpty) atoms1 | atoms2 else Set.empty
+        val tp1w = tp1.widenSingletons
+        val tp2w = tp2.widenSingletons
+        myWidened = if ((tp1 eq tp1w) && (tp2 eq tp2w)) this else tp1w | tp2w
+        atomsRunId = ctx.runId
+      }
+
+    override def atoms(implicit ctx: Context): Set[Type] = {
+      ensureAtomsComputed()
+      myAtoms
+    }
+
+    override def widenSingletons(implicit ctx: Context): Type = {
+      ensureAtomsComputed()
+      myWidened
+    }
+
     def derivedOrType(tp1: Type, tp2: Type)(implicit ctx: Context): Type =
       if ((tp1 eq this.tp1) && (tp2 eq this.tp2)) this
       else OrType.make(tp1, tp2)
@@ -3351,9 +3430,9 @@ object Types {
       param.paramName.withVariance(param.paramVariance)
 
     /** Distributes Lambda inside type bounds. Examples:
-  	 *
-   	 *      type T[X] = U        becomes    type T = [X] -> U
-   	 *      type T[X] <: U       becomes    type T >: Nothign <: ([X] -> U)
+     *
+     *      type T[X] = U        becomes    type T = [X] -> U
+     *      type T[X] <: U       becomes    type T >: Nothing <: ([X] -> U)
      *      type T[X] >: L <: U  becomes    type T >: ([X] -> L) <: ([X] -> U)
      */
     override def fromParams[PI <: ParamInfo.Of[TypeName]](params: List[PI], resultType: Type)(implicit ctx: Context): Type = {
@@ -3481,6 +3560,8 @@ object Types {
             else lo.applyIfParameterized(args)
           case _ => NoType
         }
+      case tycon: AppliedType =>
+        tycon.lowerBound.applyIfParameterized(args)
       case _ =>
         NoType
     }
@@ -3646,6 +3727,21 @@ object Types {
     }
 
     override def toString: String = s"Skolem($hashCode)"
+  }
+
+  /** A skolem type used to wrap the type of the qualifier of a selection.
+   *
+   *  When typing a selection `e.f`, if `e` is unstable then we unconditionally
+   *  skolemize it. We use a subclass of `SkolemType` for this so that
+   *  [[TypeOps#asSeenFrom]] may treat it specially for optimization purposes,
+   *  see its implementation for more details.
+   */
+  class QualSkolemType(info: Type) extends SkolemType(info) {
+    override def derivedSkolemType(info: Type)(implicit ctx: Context): SkolemType =
+      if (info eq this.info) this else QualSkolemType(info)
+  }
+  object QualSkolemType {
+    def apply(info: Type): QualSkolemType = new QualSkolemType(info)
   }
 
   // ------------ Type variables ----------------------------------------
@@ -4571,6 +4667,9 @@ object Types {
       case _ => tp
     }
 
+    protected def expandBounds(tp: TypeBounds): Type =
+      range(atVariance(-variance)(reapply(tp.lo)), reapply(tp.hi))
+
     /** Try to widen a named type to its info relative to given prefix `pre`, where possible.
      *  The possible cases are listed inline in the code.
      */
@@ -4582,10 +4681,10 @@ object Types {
             // if H#T = U, then for any x in L..H, x.T =:= U,
             // hence we can replace with U under all variances
             reapply(alias.rewrapAnnots(tp1))
-          case TypeBounds(lo, hi) =>
+          case tp: TypeBounds =>
             // If H#T = _ >: S <: U, then for any x in L..H, S <: x.T <: U,
             // hence we can replace with S..U under all variances
-            range(atVariance(-variance)(reapply(lo)), reapply(hi))
+            expandBounds(tp)
           case info: SingletonType =>
             // if H#x: y.type, then for any x in L..H, x.type =:= y.type,
             // hence we can replace with y.type under all variances
@@ -4601,8 +4700,6 @@ object Types {
      *  underlying bounds to a range, otherwise return the expansion.
      */
     def expandParam(tp: NamedType, pre: Type): Type = {
-      def expandBounds(tp: TypeBounds) =
-        range(atVariance(-variance)(reapply(tp.lo)), reapply(tp.hi))
       tp.argForParam(pre) match {
         case arg @ TypeRef(pre, _) if pre.isArgPrefixOf(arg.symbol) =>
           arg.info match {
@@ -4959,34 +5056,51 @@ object Types {
   }
 
   class TypeSizeAccumulator(implicit ctx: Context) extends TypeAccumulator[Int] {
-    def apply(n: Int, tp: Type): Int = tp match {
-      case tp: AppliedType =>
-        foldOver(n + 1, tp)
-      case tp: RefinedType =>
-        foldOver(n + 1, tp)
-      case tp: TypeRef if tp.info.isTypeAlias =>
-        apply(n, tp.superType)
-      case _ =>
-        foldOver(n, tp)
+    val seen = new java.util.IdentityHashMap[Type, Type]
+    def apply(n: Int, tp: Type): Int =
+      if (seen.get(tp) != null) n
+      else {
+        seen.put(tp, tp)
+        tp match {
+        case tp: AppliedType =>
+          foldOver(n + 1, tp)
+        case tp: RefinedType =>
+          foldOver(n + 1, tp)
+        case tp: TypeRef if tp.info.isTypeAlias =>
+          apply(n, tp.superType)
+        case tp: TypeParamRef =>
+          apply(n, ctx.typeComparer.bounds(tp))
+        case _ =>
+          foldOver(n, tp)
+      }
     }
   }
 
   class CoveringSetAccumulator(implicit ctx: Context) extends TypeAccumulator[Set[Symbol]] {
+    val seen = new java.util.IdentityHashMap[Type, Type]
     def apply(cs: Set[Symbol], tp: Type): Set[Symbol] = {
-      val sym = tp.typeSymbol
-      tp match {
-        case tp if tp.isTopType || tp.isBottomType =>
-          cs
-        case tp: AppliedType =>
-          foldOver(cs + sym, tp)
-        case tp: RefinedType =>
-          foldOver(cs + sym, tp)
-        case tp: TypeRef if tp.info.isTypeAlias =>
-          apply(cs, tp.superType)
-        case tp: TypeBounds =>
-          foldOver(cs, tp)
-        case other =>
-          foldOver(cs + sym, tp)
+      if (seen.get(tp) != null) cs
+      else {
+        seen.put(tp, tp)
+        tp match {
+          case tp if tp.isTopType || tp.isBottomType =>
+            cs
+          case tp: AppliedType =>
+            foldOver(cs + tp.typeSymbol, tp)
+          case tp: RefinedType =>
+            foldOver(cs + tp.typeSymbol, tp)
+          case tp: TypeRef if tp.info.isTypeAlias =>
+            apply(cs, tp.superType)
+          case tp: TypeRef if tp.typeSymbol.isClass =>
+            foldOver(cs + tp.typeSymbol, tp)
+          case tp: TermRef =>
+            val tsym = if (tp.termSymbol.is(Param)) tp.underlying.typeSymbol else tp.termSymbol
+            foldOver(cs + tsym, tp)
+          case tp: TypeParamRef =>
+            apply(cs, ctx.typeComparer.bounds(tp))
+          case other =>
+            foldOver(cs, tp)
+        }
       }
     }
   }

@@ -81,7 +81,7 @@ object ErrorReporting {
       if (tree.tpe.widen.exists)
         i"${exprStr(tree)} does not take ${kind}parameters"
       else {
-        new FatalError("").printStackTrace()
+        if (ctx.settings.Ydebug.value) new FatalError("").printStackTrace()
         i"undefined: $tree # ${tree.uniqueId}: ${tree.tpe.toString} at ${ctx.phase}"
       }
 
@@ -157,6 +157,10 @@ object ErrorReporting {
       }
       """\$\{\w*\}""".r.replaceSomeIn(raw, m => translate(m.matched.drop(2).init))
     }
+
+    def rewriteNotice: String =
+      if (ctx.scala2Mode) "\nThis patch can be inserted automatically under -rewrite."
+      else ""
   }
 
   def err(implicit ctx: Context): Errors = new Errors

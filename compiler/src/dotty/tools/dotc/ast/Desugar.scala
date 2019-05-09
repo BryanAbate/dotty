@@ -32,6 +32,9 @@ object desugar {
    */
   val DerivingCompanion: Property.Key[SourcePosition] = new Property.Key
 
+  /** An attachment for match expressions generated from a PatDef */
+  val PatDefMatch: Property.Key[Unit] = new Property.Key
+
   /** Info of a variable in a pattern: The named tree and its type */
   private type VarInfo = (NameTree, Tree)
 
@@ -139,8 +142,8 @@ object desugar {
    *    def x: Int = expr
    *    def x_=($1: <TypeTree()>): Unit = ()
    */
-  def valDef(vdef: ValDef)(implicit ctx: Context): Tree = {
-    val ValDef(name, tpt, rhs) = vdef
+  def valDef(vdef0: ValDef)(implicit ctx: Context): Tree = {
+    val vdef @ ValDef(name, tpt, rhs) = transformQuotedPatternName(vdef0)
     val mods = vdef.mods
     val setterNeeded =
       (mods is Mutable) && ctx.owner.isClass && (!(mods is PrivateLocal) || (ctx.owner is Trait))
@@ -158,7 +161,7 @@ object desugar {
         vparamss = (setterParam :: Nil) :: Nil,
         tpt      = TypeTree(defn.UnitType),
         rhs      = setterRhs
-      ).withMods((mods | Accessor) &~ CaseAccessor)
+      ).withMods((mods | Accessor) &~ (CaseAccessor | Implicit | Given | Lazy))
       Thicket(vdef, setter)
     }
     else vdef
@@ -197,8 +200,8 @@ object desugar {
    *  ==>
    *      inline def f(x: Boolean): Any = (if (x) 1 else ""): Any
    */
-  private def defDef(meth: DefDef, isPrimaryConstructor: Boolean = false)(implicit ctx: Context): Tree = {
-    val DefDef(_, tparams, vparamss, tpt, rhs) = meth
+  private def defDef(meth0: DefDef, isPrimaryConstructor: Boolean = false)(implicit ctx: Context): Tree = {
+    val meth @ DefDef(_, tparams, vparamss, tpt, rhs) = transformQuotedPatternName(meth0)
     val methName = normalizeName(meth, tpt).asTermName
     val mods = meth.mods
     val epbuf = new ListBuffer[ValDef]
@@ -211,6 +214,19 @@ object desugar {
       case _ =>
         rhs
     }
+
+    def dropContextBounds(tparam: TypeDef): TypeDef = {
+      def dropInRhs(rhs: Tree): Tree = rhs match {
+        case ContextBounds(tbounds, _) =>
+          tbounds
+        case rhs @ LambdaTypeTree(tparams, body) =>
+          cpy.LambdaTypeTree(rhs)(tparams, dropInRhs(body))
+        case _ =>
+          rhs
+      }
+      cpy.TypeDef(tparam)(rhs = dropInRhs(tparam.rhs))
+    }
+
     val tparams1 = tparams mapConserve { tparam =>
       cpy.TypeDef(tparam)(rhs = desugarContextBounds(tparam.rhs))
     }
@@ -239,17 +255,12 @@ object desugar {
     def normalizedVparamss = meth1.vparamss map (_ map (vparam =>
       cpy.ValDef(vparam)(rhs = EmptyTree)))
 
-    def dropContextBound(tparam: TypeDef) = tparam.rhs match {
-      case ContextBounds(tbounds, _) => cpy.TypeDef(tparam)(rhs = tbounds)
-      case _ => tparam
-    }
-
     def defaultGetters(vparamss: List[List[ValDef]], n: Int): List[DefDef] = vparamss match {
       case (vparam :: vparams) :: vparamss1 =>
         def defaultGetter: DefDef =
           DefDef(
             name = DefaultGetterName(methName, n),
-            tparams = meth.tparams.map(tparam => dropContextBound(toDefParam(tparam))),
+            tparams = meth.tparams.map(tparam => dropContextBounds(toDefParam(tparam))),
             vparamss = takeUpTo(normalizedVparamss.nestedMap(toDefParam), n),
             tpt = TypeTree(),
             rhs = vparam.rhs
@@ -270,6 +281,26 @@ object desugar {
         .withMods(meth1.mods | DefaultParameterized)
       Thicket(meth2 :: defGetters)
     }
+  }
+
+  /** Transforms a definition with a name starting with a `$` in a quoted pattern into a `quoted.binding.Binding` splice.
+   *
+   *  The desugaring consists in adding the `@patternBindHole` annotation. This annotation is used during typing to perform the full transformation.
+   *
+   *  A definition
+   *  ```scala
+   *    case '{ def $a(...) = ...; ... `$a`() ... } => a
+   *  ```
+   *  into
+   *  ```scala
+   *    case '{ @patternBindHole def `$a`(...) = ...; ... `$a`() ... } => a
+   *  ```
+   */
+  def transformQuotedPatternName(tree: ValOrDefDef)(implicit ctx: Context): ValOrDefDef = {
+    if (ctx.mode.is(Mode.QuotedPattern) && !tree.isBackquoted && tree.name != nme.ANON_FUN && tree.name.startsWith("$")) {
+      val mods = tree.mods.withAddedAnnotation(New(ref(defn.InternalQuoted_patternBindHoleAnnot.typeRef)).withSpan(tree.span))
+      tree.withMods(mods)
+    } else tree
   }
 
   // Add all evidence parameters in `params` as implicit parameters to `meth` */
@@ -800,7 +831,7 @@ object desugar {
       val moduleName = tdef.name.toTermName
       val localRef = Select(Ident(moduleName), tdef.name)
       localRef.pushAttachment(SuppressAccessCheck, ())
-      val aliasType = cpy.TypeDef(tdef)(rhs = completeForwarder(localRef))
+      val aliasType = cpy.TypeDef(tdef)(rhs = completeForwarder(localRef)).withSpan(tdef.span.startPos)
       val localType = tdef.withMods(Modifiers(Synthetic | Opaque).withPrivateWithin(tdef.name))
 
       val companions = moduleDef(ModuleDef(
@@ -913,16 +944,38 @@ object desugar {
     case IdPattern(named, tpt) =>
       derivedValDef(original, named, tpt, rhs, mods)
     case _ =>
-      val rhsUnchecked = makeAnnotated("scala.unchecked", rhs)
-      val vars = getVariables(pat)
-      val isMatchingTuple: Tree => Boolean = {
-        case Tuple(es) => es.length == vars.length
+      def isTuplePattern(arity: Int): Boolean = pat match {
+        case Tuple(pats) if pats.size == arity =>
+          pats.forall(isVarPattern)
         case _ => false
       }
+      val isMatchingTuple: Tree => Boolean = {
+        case Tuple(es) => isTuplePattern(es.length)
+        case _ => false
+      }
+
+      // We can only optimize `val pat = if (...) e1 else e2` if:
+      // - `e1` and `e2` are both tuples of arity N
+      // - `pat` is a tuple of N variables or wildcard patterns like `(x1, x2, ..., xN)`
+      val tupleOptimizable = forallResults(rhs, isMatchingTuple)
+
+      def rhsUnchecked = {
+        val rhs1 = makeAnnotated("scala.unchecked", rhs)
+        rhs1.pushAttachment(PatDefMatch, ())
+        rhs1
+      }
+      val vars =
+        if (tupleOptimizable) // include `_`
+          pat match {
+            case Tuple(pats) =>
+            pats.map { case id: Ident => id -> TypeTree() }
+          }
+        else getVariables(pat)  // no `_`
+
       val ids = for ((named, _) <- vars) yield Ident(named.name)
       val caseDef = CaseDef(pat, EmptyTree, makeTuple(ids))
       val matchExpr =
-        if (forallResults(rhs, isMatchingTuple)) rhs
+        if (tupleOptimizable) rhs
         else Match(rhsUnchecked, caseDef :: Nil)
       vars match {
         case Nil =>
@@ -938,7 +991,7 @@ object desugar {
               .withSpan(pat.span.union(rhs.span)).withMods(patMods)
           def selector(n: Int) = Select(Ident(tmpName), nme.selectorName(n))
           val restDefs =
-            for (((named, tpt), n) <- vars.zipWithIndex)
+            for (((named, tpt), n) <- vars.zipWithIndex if named.name != nme.WILDCARD)
             yield
               if (mods is Lazy) derivedDefDef(original, named, tpt, selector(n), mods &~ Lazy)
               else derivedValDef(original, named, tpt, selector(n), mods)
@@ -1013,8 +1066,7 @@ object desugar {
     val arity = ts.length
     assert(arity <= Definitions.MaxTupleArity)
     def tupleTypeRef = defn.TupleType(arity)
-    if (arity == 1) ts.head
-    else if (arity == 0)
+    if (arity == 0)
       if (ctx.mode is Mode.Type) TypeTree(defn.UnitType) else unitLiteral
     else if (ctx.mode is Mode.Type) AppliedTypeTree(ref(tupleTypeRef), ts)
     else Apply(ref(tupleTypeRef.classSymbol.companionModule.termRef), ts)
@@ -1034,7 +1086,7 @@ object desugar {
       case stat: TypeDef if stat.mods.is(Opaque) => stat.name
     }
     def needsObject(stat: Tree) = stat match {
-      case _: ValDef | _: PatDef | _: DefDef => true
+      case _: ValDef | _: PatDef | _: DefDef | _: Export => true
       case stat: ModuleDef =>
         stat.mods.is(ImplicitOrImplied) || opaqueNames.contains(stat.name.stripModuleClassSuffix.toTypeName)
       case stat: TypeDef => !stat.isClassDef || stat.mods.is(ImplicitOrImplied)
@@ -1114,9 +1166,10 @@ object desugar {
     Function(param :: Nil, Block(vdefs, body))
   }
 
-  def makeContextualFunction(formals: List[Type], body: Tree)(implicit ctx: Context): Tree = {
-    val params = makeImplicitParameters(formals.map(TypeTree), Given)
-    new FunctionWithMods(params, body, Modifiers(Implicit | Given))
+  def makeContextualFunction(formals: List[Type], body: Tree, isErased: Boolean)(implicit ctx: Context): Tree = {
+    val mods = if (isErased) Given | Erased else Given
+    val params = makeImplicitParameters(formals.map(TypeTree), mods)
+    new FunctionWithMods(params, body, Modifiers(Implicit | mods))
   }
 
   /** Add annotation to tree:
@@ -1352,6 +1405,7 @@ object desugar {
           case ts: Thicket => ts.trees.tail
           case t => Nil
         } map {
+          case Block(Nil, EmptyTree) => Literal(Constant(())) // for s"... ${} ..."
           case Block(Nil, expr) => expr // important for interpolated string as patterns, see i1773.scala
           case t => t
         }
@@ -1503,6 +1557,14 @@ object desugar {
         trees foreach collect
       case Block(Nil, expr) =>
         collect(expr)
+      case Quote(expr) =>
+        new TreeTraverser {
+          def traverse(tree: untpd.Tree)(implicit ctx: Context): Unit = tree match {
+            case Splice(expr) => collect(expr)
+            case TypSplice(expr) => collect(expr)
+            case _ => traverseChildren(tree)
+          }
+        }.traverse(expr)
       case _ =>
     }
     collect(tree)

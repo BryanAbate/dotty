@@ -13,11 +13,11 @@ import printing.Texts.Text
 
 object ImportInfo {
   /** The import info for a root import from given symbol `sym` */
-  def rootImport(refFn: () => TermRef)(implicit ctx: Context): ImportInfo = {
+  def rootImport(refFn: () => TermRef, importImplied: Boolean = false)(implicit ctx: Context): ImportInfo = {
     val selectors = untpd.Ident(nme.WILDCARD) :: Nil
     def expr(implicit ctx: Context) = tpd.Ident(refFn())
-    def imp(implicit ctx: Context) = tpd.Import(importImplied = false, expr, selectors)
-    new ImportInfo(implicit ctx => imp.symbol, selectors, None, importImplied = false, isRootImport = true)
+    def imp(implicit ctx: Context) = tpd.Import(importImplied = importImplied, expr, selectors)
+    new ImportInfo(implicit ctx => imp.symbol, selectors, None, importImplied = importImplied, isRootImport = true)
   }
 }
 
@@ -146,15 +146,15 @@ class ImportInfo(symf: Context => Symbol, val selectors: List[untpd.Tree],
   private[this] var myUnimported: Symbol = _
 
   /** Does this import clause or a preceding import clause import `owner.feature`? */
-  def featureImported(owner: Symbol, feature: TermName)(implicit ctx: Context): Boolean = {
+  def featureImported(feature: TermName, owner: Symbol)(implicit ctx: Context): Boolean = {
     def compute = {
-      val isImportOwner = site.widen.typeSymbol `eq` owner
+      val isImportOwner = site.widen.typeSymbol.eq(owner)
       if (isImportOwner && originals.contains(feature)) true
       else if (isImportOwner && excluded.contains(feature)) false
       else {
         var c = ctx.outer
         while (c.importInfo eq ctx.importInfo) c = c.outer
-        (c.importInfo != null) && c.importInfo.featureImported(owner, feature)(c)
+        (c.importInfo != null) && c.importInfo.featureImported(feature, owner)(c)
       }
     }
     if (lastOwner.ne(owner) || !lastResults.contains(feature)) {

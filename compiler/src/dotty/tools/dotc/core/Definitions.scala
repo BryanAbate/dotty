@@ -106,13 +106,13 @@ class Definitions {
    *  ErasedFunctionN traits follow this template:
    *
    *      trait ErasedFunctionN[T0,...,T{N-1}, R] extends Object {
-   *        def apply(erased $x0: T0, ..., $x{N_1}: T{N-1}): R
+   *        def apply erased ($x0: T0, ..., $x{N_1}: T{N-1}): R
    *      }
    *
    *  ErasedImplicitFunctionN traits follow this template:
    *
    *      trait ErasedImplicitFunctionN[T0,...,T{N-1}, R] extends Object {
-   *        def apply given (erased $x0: T0, ..., $x{N_1}: T{N-1}): R
+   *        def apply given erased ($x0: T0, ..., $x{N_1}: T{N-1}): R
    *      }
    *
    *  ErasedFunctionN and ErasedImplicitFunctionN erase to Function0.
@@ -631,9 +631,16 @@ class Definitions {
     def StringContextS(implicit ctx: Context): Symbol = StringContextSR.symbol
     lazy val StringContextRawR: TermRef = StringContextClass.requiredMethodRef(nme.raw_)
     def StringContextRaw(implicit ctx: Context): Symbol = StringContextRawR.symbol
+    lazy val StringContext_fR: TermRef = StringContextClass.requiredMethodRef(nme.f)
+    def StringContext_f(implicit ctx: Context): Symbol = StringContext_fR.symbol
   def StringContextModule(implicit ctx: Context): Symbol = StringContextClass.companionModule
     lazy val StringContextModule_applyR: TermRef = StringContextModule.requiredMethodRef(nme.apply)
     def StringContextModule_apply(implicit ctx: Context): Symbol = StringContextModule_applyR.symbol
+
+  lazy val InternalStringContextModuleR: TermRef = ctx.requiredModuleRef("dotty.internal.StringContext")
+  def InternalStringContextModule(implicit ctx: Context): Symbol = InternalStringContextModuleR.termSymbol
+    lazy val InternalStringContextModule_fR: TermRef = InternalStringContextModule.requiredMethodRef(nme.f)
+    def InternalStringContextModule_f(implicit ctx: Context): Symbol = InternalStringContextModule_fR.symbol
 
   lazy val PartialFunctionType: TypeRef         = ctx.requiredClassRef("scala.PartialFunction")
   def PartialFunctionClass(implicit ctx: Context): ClassSymbol = PartialFunctionType.symbol.asClass
@@ -705,14 +712,23 @@ class Definitions {
   lazy val QuotedExprType: TypeRef = ctx.requiredClassRef("scala.quoted.Expr")
   def QuotedExprClass(implicit ctx: Context): ClassSymbol = QuotedExprType.symbol.asClass
 
-  lazy val InternalQuotedModule: TermRef = ctx.requiredModuleRef("scala.internal.Quoted")
-  def InternalQuotedModuleClass: Symbol = InternalQuotedModule.symbol
-    lazy val InternalQuoted_exprQuoteR: TermRef = InternalQuotedModuleClass.requiredMethodRef("exprQuote".toTermName)
+  lazy val InternalQuotedModuleRef: TermRef = ctx.requiredModuleRef("scala.internal.Quoted")
+  def InternalQuotedModule: Symbol = InternalQuotedModuleRef.symbol
+    lazy val InternalQuoted_exprQuoteR: TermRef = InternalQuotedModule.requiredMethodRef("exprQuote")
     def InternalQuoted_exprQuote(implicit ctx: Context): Symbol = InternalQuoted_exprQuoteR.symbol
-    lazy val InternalQuoted_exprSpliceR: TermRef = InternalQuotedModuleClass.requiredMethodRef("exprSplice".toTermName)
+    lazy val InternalQuoted_exprSpliceR: TermRef = InternalQuotedModule.requiredMethodRef("exprSplice")
     def InternalQuoted_exprSplice(implicit ctx: Context): Symbol = InternalQuoted_exprSpliceR.symbol
-    lazy val InternalQuoted_typeQuoteR: TermRef = InternalQuotedModuleClass.requiredMethodRef("typeQuote".toTermName)
+    lazy val InternalQuoted_typeQuoteR: TermRef = InternalQuotedModule.requiredMethodRef("typeQuote")
     def InternalQuoted_typeQuote(implicit ctx: Context): Symbol = InternalQuoted_typeQuoteR.symbol
+    lazy val InternalQuoted_patternHoleR: TermRef = InternalQuotedModule.requiredMethodRef("patternHole")
+    def InternalQuoted_patternHole(implicit ctx: Context): Symbol = InternalQuoted_patternHoleR.symbol
+    lazy val InternalQuoted_patternBindHoleAnnot: ClassSymbol = InternalQuotedModule.requiredClass("patternBindHole")
+
+  lazy val InternalQuotedMatcherModuleRef: TermRef = ctx.requiredModuleRef("scala.internal.quoted.Matcher")
+    def InternalQuotedMatcherModule(implicit ctx: Context): Symbol = InternalQuotedMatcherModuleRef.symbol
+
+    lazy val InternalQuotedMatcher_unapplyR: TermRef = InternalQuotedMatcherModule.requiredMethodRef(nme.unapply)
+    def InternalQuotedMatcher_unapply(implicit ctx: Context) = InternalQuotedMatcher_unapplyR.symbol
 
   lazy val QuotedExprsModule: TermSymbol = ctx.requiredModule("scala.quoted.Exprs")
   def QuotedExprsClass(implicit ctx: Context): ClassSymbol = QuotedExprsModule.asClass
@@ -723,24 +739,11 @@ class Definitions {
     lazy val QuotedType_spliceR: TypeRef = QuotedTypeClass.requiredType(tpnme.splice).typeRef
     def QuotedType_splice : Symbol = QuotedType_spliceR.symbol
 
-  lazy val QuotedTypeModuleType: TermRef = ctx.requiredModuleRef("scala.quoted.Type")
-  def QuotedTypeModule(implicit ctx: Context): Symbol = QuotedTypeModuleType.symbol
+  lazy val QuotedTypeModuleRef: TermRef = ctx.requiredModuleRef("scala.quoted.Type")
+  def QuotedTypeModule(implicit ctx: Context): Symbol = QuotedTypeModuleRef.symbol
 
-  lazy val QuotedLiftableModule: TermSymbol = ctx.requiredModule("scala.quoted.Liftable")
-  def QuotedLiftableModuleClass(implicit ctx: Context): ClassSymbol = QuotedLiftableModule.asClass
-
-    def QuotedLiftable_BooleanIsLiftable: TermRef = QuotedLiftableModule.requiredMethodRef("BooleanIsLiftable")
-    def QuotedLiftable_ByteIsLiftable: TermRef = QuotedLiftableModule.requiredMethodRef("ByteIsLiftable")
-    def QuotedLiftable_CharIsLiftable: TermRef = QuotedLiftableModule.requiredMethodRef("CharIsLiftable")
-    def QuotedLiftable_ShortIsLiftable: TermRef = QuotedLiftableModule.requiredMethodRef("ShortIsLiftable")
-    def QuotedLiftable_IntIsLiftable: TermRef = QuotedLiftableModule.requiredMethodRef("IntIsLiftable")
-    def QuotedLiftable_LongIsLiftable: TermRef = QuotedLiftableModule.requiredMethodRef("LongIsLiftable")
-    def QuotedLiftable_FloatIsLiftable: TermRef = QuotedLiftableModule.requiredMethodRef("FloatIsLiftable")
-    def QuotedLiftable_DoubleIsLiftable: TermRef = QuotedLiftableModule.requiredMethodRef("DoubleIsLiftable")
-    def QuotedLiftable_StringIsLiftable: TermRef = QuotedLiftableModule.requiredMethodRef("StringIsLiftable")
-
-  lazy val QuotedLiftableType: TypeRef = ctx.requiredClassRef("scala.quoted.Liftable")
-  def QuotedLiftableClass(implicit ctx: Context): ClassSymbol = QuotedLiftableType.symbol.asClass
+  lazy val QuotedMatchingBindingType: TypeRef = ctx.requiredClassRef("scala.quoted.matching.Bind")
+  def QuotedMatchingBindingClass(implicit ctx: Context): ClassSymbol = QuotedMatchingBindingType.symbol.asClass
 
   def Unpickler_unpickleExpr: TermSymbol = ctx.requiredMethod("scala.runtime.quoted.Unpickler.unpickleExpr")
   def Unpickler_liftedExpr: TermSymbol = ctx.requiredMethod("scala.runtime.quoted.Unpickler.liftedExpr")
@@ -854,6 +857,8 @@ class Definitions {
   def TailrecAnnot(implicit ctx: Context): ClassSymbol = TailrecAnnotType.symbol.asClass
   lazy val TransientParamAnnotType: TypeRef = ctx.requiredClassRef("scala.annotation.constructorOnly")
   def TransientParamAnnot(implicit ctx: Context): ClassSymbol = TransientParamAnnotType.symbol.asClass
+  lazy val CompileTimeOnlyAnnotType: TypeRef = ctx.requiredClassRef("scala.annotation.compileTimeOnly")
+  def CompileTimeOnlyAnnot(implicit ctx: Context): ClassSymbol = CompileTimeOnlyAnnotType.symbol.asClass
   lazy val SwitchAnnotType: TypeRef = ctx.requiredClassRef("scala.annotation.switch")
   def SwitchAnnot(implicit ctx: Context): ClassSymbol = SwitchAnnotType.symbol.asClass
   lazy val ThrowsAnnotType: TypeRef = ctx.requiredClassRef("scala.throws")
@@ -1178,7 +1183,9 @@ class Definitions {
   }
 
   def tupleType(elems: List[Type]): Type = {
-    TupleType(elems.size).appliedTo(elems)
+    val arity = elems.length
+    if (arity <= MaxTupleArity && TupleType(arity) != null) TupleType(arity).appliedTo(elems)
+    else TypeOps.nestedPairs(elems)
   }
 
   def isProductSubType(tp: Type)(implicit ctx: Context): Boolean =
@@ -1271,8 +1278,9 @@ class Definitions {
   def adjustForTuple(cls: ClassSymbol, tparams: List[TypeSymbol], parents: List[Type]): List[Type] = {
     def syntheticParent(tparams: List[TypeSymbol]): Type =
       if (tparams.isEmpty) TupleTypeRef
-      else (tparams :\ (UnitType: Type)) ((tparam, tail) => PairType.appliedTo(tparam.typeRef, tail))
-    if (isTupleClass(cls) || cls == UnitClass) parents :+ syntheticParent(tparams) else parents
+      else TypeOps.nestedPairs(tparams.map(_.typeRef))
+    if (isTupleClass(cls) || cls == UnitClass) parents :+ syntheticParent(tparams)
+    else parents
   }
 
   // ----- primitive value class machinery ------------------------------------------

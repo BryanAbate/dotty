@@ -254,7 +254,7 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
         }
       case t: TypeApply if (t.fun.symbol == Predef_classOf) =>
         av.visit(name, t.args.head.tpe.classSymbol.denot.info.toTypeKind(bcodeStore)(innerClasesStore).toASMType)
-      case t: tpd.Select =>
+      case t: tpd.RefTree =>
         if (t.symbol.denot.owner.is(Flags.JavaEnum)) {
           val edesc = innerClasesStore.typeDescriptor(t.tpe.asInstanceOf[bcodeStore.int.Type]) // the class descriptor of the enumeration class.
           val evalue = t.symbol.name.mangledString // value the actual enumeration value.
@@ -482,11 +482,19 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
 
   private def verifySignature(sym: Symbol, sig: String)(implicit ctx: Context): Unit = {
     import scala.tools.asm.util.CheckClassAdapter
-    def wrap(body: => Unit): Boolean =
-      try { body; true }
-      catch { case ex: Throwable => println(ex.getMessage); false }
+    def wrap(body: => Unit): Unit = {
+      try body
+      catch {
+        case ex: Throwable =>
+          ctx.error(i"""|compiler bug: created invalid generic signature for $sym in ${sym.denot.owner.showFullName}
+                      |signature: $sig
+                      |if this is reproducible, please report bug at https://github.com/lampepfl/dotty/issues
+                   """.trim, sym.sourcePos)
+          throw  ex
+      }
+    }
 
-    val valid = wrap {
+    wrap {
       if (sym.is(Flags.Method)) {
         CheckClassAdapter.checkMethodSignature(sig)
       }
@@ -496,14 +504,6 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
       else {
         CheckClassAdapter.checkClassSignature(sig)
       }
-    }
-
-    if (!valid) {
-      ctx.error(
-        i"""|compiler bug: created invalid generic signature for $sym in ${sym.denot.owner.showFullName}
-            |signature: $sig
-            |if this is reproducible, please report bug at https://github.com/lampepfl/dotty/issues
-        """.trim, sym.sourcePos)
     }
   }
 
@@ -727,18 +727,9 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
     // navigation
     def owner: Symbol = toDenot(sym).owner
     def rawowner: Symbol = {
-      originalOwner
+      originalOwner.originalLexicallyEnclosingClass
     }
-    def originalOwner: Symbol =
-      // used to populate the EnclosingMethod attribute.
-      // it is very tricky in presence of classes(and annonymous classes) defined inside supper calls.
-      if (sym.exists) {
-        val original = toDenot(sym).initial
-        val validity = original.validFor
-        val shiftedContext = ctx.withPhase(validity.phaseId)
-        val r = toDenot(sym)(shiftedContext).maybeOwner.lexicallyEnclosingClass(shiftedContext)
-        r
-      } else NoSymbol
+    def originalOwner: Symbol = toDenot(sym).originalOwner
     def parentSymbols: List[Symbol] = toDenot(sym).info.parents.map(_.typeSymbol)
     def superClass: Symbol =  {
       val t = toDenot(sym).asClass.superClass
@@ -765,6 +756,14 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
       }
       else sym.enclosingClass(ctx.withPhase(ctx.flattenPhase.prev))
     } //todo is handled specially for JavaDefined symbols in scalac
+    def originalLexicallyEnclosingClass: Symbol =
+      // used to populate the EnclosingMethod attribute.
+      // it is very tricky in presence of classes(and annonymous classes) defined inside supper calls.
+      if (sym.exists) {
+        val validity = toDenot(sym).initial.validFor
+        val shiftedContext = ctx.withPhase(validity.phaseId)
+        toDenot(sym)(shiftedContext).lexicallyEnclosingClass(shiftedContext)
+      } else NoSymbol
     def nextOverriddenSymbol: Symbol = toDenot(sym).nextOverriddenSymbol
 
     // members
@@ -839,22 +838,16 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
         toDenot(sym).owner.is(Flags.PackageClass)
       }
 
-    /**
-     * This is basically a re-implementation of sym.isStaticOwner, but using the originalOwner chain.
-     *
-     * The problem is that we are interested in a source-level property. Various phases changed the
-     * symbol's properties in the meantime, mostly lambdalift modified (destructively) the owner.
-     * Therefore, `sym.isStatic` is not what we want. For example, in
-     *   object T { def f { object U } }
-     * the owner of U is T, so UModuleClass.isStatic is true. Phase travel does not help here.
-     */
-    def isOriginallyStaticOwner: Boolean = sym.isStatic
-
-
     def addRemoteRemoteExceptionAnnotation: Unit = ()
 
-    def samMethod(): Symbol =
-      toDenot(sym).info.abstractTermMembers.headOption.getOrElse(toDenot(sym).info.member(nme.apply)).symbol
+    def samMethod(): Symbol = ctx.atPhase(ctx.erasurePhase) { implicit ctx =>
+      toDenot(sym).info.abstractTermMembers.toList match {
+        case x :: Nil => x.symbol
+        case Nil => abort(s"${sym.show} is not a functional interface. It doesn't have abstract methods")
+        case xs => abort(s"${sym.show} is not a functional interface. " +
+          s"It has the following abstract methods: ${xs.map(_.name).mkString(", ")}")
+      }
+    }
 
     def isFunctionClass: Boolean =
       defn.isFunctionClass(sym)

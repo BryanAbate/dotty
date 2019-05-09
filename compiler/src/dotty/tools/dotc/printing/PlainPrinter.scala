@@ -185,10 +185,10 @@ class PlainPrinter(_ctx: Context) extends Printer {
         "<noprefix>"
       case tp: MethodType =>
         changePrec(GlobalPrec) {
-          (if (tp.isContextual) " given " else "") ~
-          ("(" + (if (tp.isErasedMethod)   "erased "   else "")
-               + (if (tp.isImplicitMethod && !tp.isContextual) "implicit " else "")
-          ) ~ paramsText(tp) ~
+          (if (tp.isContextual) " given" else "") ~
+          (if (tp.isErasedMethod) " erased" else "") ~~
+          ("(" + (if (tp.isImplicitMethod && !tp.isContextual) "implicit " else "")) ~
+          paramsText(tp) ~
           (if (tp.resultType.isInstanceOf[MethodType]) ")" else "): ") ~
           toText(tp.resultType)
         }
@@ -298,7 +298,7 @@ class PlainPrinter(_ctx: Context) extends Printer {
     }
   }
 
-  /** The string representation of this type used as a prefix */
+  /** The string representation of this type used as a prefix, including separator */
   protected def toTextPrefix(tp: Type): Text = controlled {
     homogenize(tp) match {
       case NoPrefix => ""

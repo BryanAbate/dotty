@@ -449,8 +449,7 @@ class Typer extends Namer
       }
     case qual =>
       if (tree.name.isTypeName) checkStable(qual.tpe, qual.sourcePos)
-      val select = Applications.handleMeta(
-        checkValue(assignType(cpy.Select(tree)(qual, tree.name), qual), pt))
+      val select = checkValue(assignType(cpy.Select(tree)(qual, tree.name), qual), pt)
       if (select.tpe ne TryDynamicCallType) ConstFold(checkStableIdentPattern(select, pt))
       else if (pt.isInstanceOf[FunOrPolyProto] || pt == AssignProto) select
       else typedDynamicSelect(tree, Nil, pt)
@@ -580,7 +579,10 @@ class Typer extends Namer
 
     if (untpd.isWildcardStarArg(tree)) {
       def typedWildcardStarArgExpr = {
-        val tpdExpr = typedExpr(tree.expr)
+        val ptArg =
+          if (ctx.mode.is(Mode.QuotedPattern)) pt.underlyingIfRepeated(isJava = false)
+          else WildcardType
+        val tpdExpr = typedExpr(tree.expr, ptArg)
         tpdExpr.tpe.widenDealias match {
           case defn.ArrayOf(_) =>
             val starType = defn.ArrayType.appliedTo(WildcardType)
@@ -1034,7 +1036,15 @@ class Typer extends Namer
         if (tree.isInline) checkInInlineContext("inline match", tree.posd)
         val sel1 = typedExpr(tree.selector)
         val selType = fullyDefinedType(sel1.tpe, "pattern selector", tree.span).widen
-        typedMatchFinish(tree, sel1, selType, tree.cases, pt)
+        val result = typedMatchFinish(tree, sel1, selType, tree.cases, pt)
+        result match {
+          case Match(sel, CaseDef(pat, _, _) :: _)
+          if (tree.selector.removeAttachment(desugar.PatDefMatch).isDefined) =>
+            if (!checkIrrefutable(pat, sel.tpe) && ctx.scala2Mode)
+              patch(Span(pat.span.end), ": @unchecked")
+          case _ =>
+        }
+        result
     }
   }
 
@@ -1273,7 +1283,7 @@ class Typer extends Namer
     assignType(cpy.SingletonTypeTree(tree)(ref1), ref1)
   }
 
-  def typedRefinedTypeTree(tree: untpd.RefinedTypeTree)(implicit ctx: Context): RefinedTypeTree = track("typedRefinedTypeTree") {
+  def typedRefinedTypeTree(tree: untpd.RefinedTypeTree)(implicit ctx: Context): TypTree = track("typedRefinedTypeTree") {
     val tpt1 = if (tree.tpt.isEmpty) TypeTree(defn.ObjectType) else typedAheadType(tree.tpt)
     val refineClsDef = desugar.refinedTypeToClass(tpt1, tree.refinements).withSpan(tree.span)
     val refineCls = createSymbol(refineClsDef).asClass
@@ -1359,7 +1369,7 @@ class Typer extends Namer
           checkSimpleKinded(checkNoWildcard(arg)))
       else if (tpt1.symbol == defn.orType)
         checkedArgs = checkedArgs.mapconserve(arg =>
-          checkNotSingleton(checkSimpleKinded(checkNoWildcard(arg)), "in a union type"))
+          checkSimpleKinded(checkNoWildcard(arg)))
       assignType(cpy.AppliedTypeTree(tree)(tpt1, checkedArgs), tpt1, checkedArgs)
     }
   }
@@ -1555,9 +1565,19 @@ class Typer extends Namer
       PrepareInlineable.registerInlineInfo(sym, _ => rhs1)
     }
 
-    if (sym.isConstructor && !sym.isPrimaryConstructor)
+    if (sym.isConstructor && !sym.isPrimaryConstructor) {
       for (param <- tparams1 ::: vparamss1.flatten)
         checkRefsLegal(param, sym.owner, (name, sym) => sym.is(TypeParam), "secondary constructor")
+
+      def checkThisConstrCall(tree: Tree): Unit = tree match {
+        case app: Apply if untpd.isSelfConstrCall(app) =>
+          if (sym.span.exists && app.symbol.span.exists && sym.span.start <= app.symbol.span.start)
+            ctx.error("secondary constructor must call a preceding constructor", app.sourcePos)
+        case Block(call :: _, _) => checkThisConstrCall(call)
+        case _ =>
+      }
+      checkThisConstrCall(rhs1)
+    }
 
     assignType(cpy.DefDef(ddef)(name, tparams1, vparamss1, tpt1, rhs1), sym).setDefTree
       //todo: make sure dependent method types do not depend on implicits or by-name params
@@ -1692,8 +1712,7 @@ class Typer extends Namer
         !ctx.dynamicsEnabled
       if (reportDynamicInheritance) {
         val isRequired = parents1.exists(_.tpe.isRef(defn.DynamicClass))
-        ctx.featureWarning(nme.dynamics.toString, "extension of type scala.Dynamic", isScala2Feature = true,
-          cls, isRequired, cdef.sourcePos)
+        ctx.featureWarning(nme.dynamics.toString, "extension of type scala.Dynamic", cls, isRequired, cdef.sourcePos)
       }
 
       checkNonCyclicInherited(cls.thisType, cls.classParents, cls.info.decls, cdef.posd)
@@ -1780,8 +1799,7 @@ class Typer extends Namer
 
   def typedImport(imp: untpd.Import, sym: Symbol)(implicit ctx: Context): Import = track("typedImport") {
     val expr1 = typedExpr(imp.expr, AnySelectionProto)
-    checkStable(expr1.tpe, imp.expr.sourcePos)
-    if (!ctx.isAfterTyper) checkRealizable(expr1.tpe, imp.expr.posd)
+    checkLegalImportPath(expr1)
     assignType(cpy.Import(imp)(imp.importImplied, expr1, imp.selectors), sym)
   }
 
@@ -1817,8 +1835,11 @@ class Typer extends Namer
           }
         case _ => arg1
       }
-      val tpt = TypeTree(AnnotatedType(arg1.tpe.widenIfUnstable, Annotation(annot1)))
-      assignType(cpy.Typed(tree)(arg2, tpt), tpt)
+      val argType =
+        if (arg1.isInstanceOf[Bind]) arg1.tpe.widen // bound symbol is not accessible outside of Bind node
+        else arg1.tpe.widenIfUnstable
+      val annotatedTpt = TypeTree(AnnotatedType(argType, Annotation(annot1)))
+      assignType(cpy.Typed(tree)(arg2, annotatedTpt), annotatedTpt)
     }
   }
 
@@ -1919,7 +1940,7 @@ class Typer extends Namer
         else {
           val elemTpes = (elems, pts).zipped.map((elem, pt) =>
             ctx.typeComparer.widenInferred(elem.tpe, pt))
-          val resTpe = (elemTpes :\ (defn.UnitType: Type))(defn.PairType.appliedTo(_, _))
+          val resTpe = TypeOps.nestedPairs(elemTpes)
           app1.cast(resTpe)
         }
       }
@@ -1930,16 +1951,80 @@ class Typer extends Namer
    *  while tracking the quotation level in the context.
    */
   def typedQuote(tree: untpd.Quote, pt: Type)(implicit ctx: Context): Tree = track("typedQuote") {
-    tree.t match {
+    tree.quoted match {
       case untpd.Splice(innerExpr) =>
         ctx.warning("Canceled splice directly inside a quote. '{ ${ XYZ } } is equivalent to XYZ.", tree.sourcePos)
         typed(innerExpr, pt)
-      case t if t.isType =>
-        typedTypeApply(untpd.TypeApply(untpd.ref(defn.InternalQuoted_typeQuoteR), List(tree.t)), pt)(quoteContext).withSpan(tree.span)
-      case t=>
-        typedApply(untpd.Apply(untpd.ref(defn.InternalQuoted_exprQuoteR), tree.t), pt)(quoteContext).withSpan(tree.span)
+      case quoted if quoted.isType =>
+        ctx.compilationUnit.needsStaging = true
+        typedTypeApply(untpd.TypeApply(untpd.ref(defn.InternalQuoted_typeQuoteR), quoted :: Nil), pt)(quoteContext).withSpan(tree.span)
+      case quoted =>
+        ctx.compilationUnit.needsStaging = true
+        if (ctx.mode.is(Mode.Pattern) && level == 0) {
+          val exprPt = pt.baseType(defn.QuotedExprClass)
+          val quotedPt = if (exprPt.exists) exprPt.argTypesHi.head else defn.AnyType
+          val quoted1 = typedExpr(quoted, quotedPt)(quoteContext.addMode(Mode.QuotedPattern))
+          val (shape, splices) = splitQuotePattern(quoted1)
+          val patType = defn.tupleType(splices.tpes.map(_.widen))
+          val splicePat = typed(untpd.Tuple(splices.map(untpd.TypedSplice(_))).withSpan(quoted.span), patType)
+          UnApply(
+            fun = ref(defn.InternalQuotedMatcher_unapplyR).appliedToType(patType),
+            implicits =
+              ref(defn.InternalQuoted_exprQuoteR).appliedToType(shape.tpe).appliedTo(shape) ::
+              implicitArgTree(defn.TastyReflectionType, tree.span) :: Nil,
+            patterns = splicePat :: Nil,
+            proto = pt)
+        }
+        else
+          typedApply(untpd.Apply(untpd.ref(defn.InternalQuoted_exprQuoteR), quoted), pt)(quoteContext).withSpan(tree.span)
     }
   }
+
+  def splitQuotePattern(quoted: Tree)(implicit ctx: Context): (Tree, List[Tree]) = {
+    val ctx0 = ctx
+    object splitter extends tpd.TreeMap {
+      val patBuf = new mutable.ListBuffer[Tree]
+      override def transform(tree: Tree)(implicit ctx: Context) = tree match {
+        case Typed(Splice(pat), tpt) if !tpt.tpe.derivesFrom(defn.RepeatedParamClass) =>
+          val exprTpt = AppliedTypeTree(TypeTree(defn.QuotedExprType), tpt :: Nil)
+          transform(Splice(Typed(pat, exprTpt)))
+        case Splice(pat) =>
+          try patternHole(tree)
+          finally {
+            val patType = pat.tpe.widen
+            val patType1 = patType.underlyingIfRepeated(isJava = false)
+            val pat1 = if (patType eq patType1) pat else pat.withType(patType1)
+            patBuf += pat1
+          }
+        case ddef: ValOrDefDef =>
+          if (ddef.symbol.hasAnnotation(defn.InternalQuoted_patternBindHoleAnnot)) {
+            val bindingType = ddef.symbol.info match {
+              case t: ExprType => t.resType
+              case t: MethodType => t.toFunctionType()
+              case t: PolyType =>
+                HKTypeLambda(t.paramNames)(
+                    x => t.paramInfos.mapConserve(_.subst(t, x).asInstanceOf[TypeBounds]),
+                    x => t.resType.subst(t, x).toFunctionType())
+              case t => t
+            }
+            val bindingExprTpe = AppliedType(defn.QuotedMatchingBindingType, bindingType :: Nil)
+            assert(ddef.name.startsWith("$"))
+            val bindName = ddef.name.toString.stripPrefix("$").toTermName
+            val sym = ctx0.newPatternBoundSymbol(bindName, bindingExprTpe, ddef.span)
+            patBuf += Bind(sym, untpd.Ident(nme.WILDCARD).withType(bindingExprTpe)).withSpan(ddef.span)
+          }
+          super.transform(tree)
+        case _ =>
+          super.transform(tree)
+      }
+    }
+    val result = splitter.transform(quoted)
+    (result, splitter.patBuf.toList)
+  }
+
+  /** A hole the shape pattern of a quoted.Matcher.unapply, representing a splice */
+  def patternHole(splice: Tree)(implicit ctx: Context): Tree =
+    ref(defn.InternalQuoted_patternHoleR).appliedToType(splice.tpe).withSpan(splice.span)
 
   /** Translate `${ t: Expr[T] }` into expression `t.splice` while tracking the quotation level in the context */
   def typedSplice(tree: untpd.Splice, pt: Type)(implicit ctx: Context): Tree = track("typedSplice") {
@@ -1949,12 +2034,36 @@ class Typer extends Namer
         ctx.warning("Canceled quote directly inside a splice. ${ '{ XYZ } } is equivalent to XYZ.", tree.sourcePos)
         typed(innerExpr, pt)
       case expr =>
-        typedApply(untpd.Apply(untpd.ref(defn.InternalQuoted_exprSpliceR), tree.expr), pt)(spliceContext).withSpan(tree.span)
+        ctx.compilationUnit.needsStaging = true
+        if (ctx.mode.is(Mode.QuotedPattern) && level == 1) {
+          if (isFullyDefined(pt, ForceDegree.all)) {
+            def spliceOwner(ctx: Context): Symbol =
+              if (ctx.mode.is(Mode.QuotedPattern)) spliceOwner(ctx.outer) else ctx.owner
+            val pat = typedPattern(expr, defn.QuotedExprType.appliedTo(pt))(
+              spliceContext.retractMode(Mode.QuotedPattern).withOwner(spliceOwner(ctx)))
+            Splice(pat)
+          } else {
+            ctx.error(i"Type must be fully defined.\nConsider annotating the splice using a type ascription:\n  ($tree: XYZ).", expr.sourcePos)
+            tree.withType(UnspecifiedErrorType)
+          }
+        }
+        else {
+          if (StagingContext.level == 0) {
+            // Mark the first inline method from the context as a macro
+            def markAsMacro(c: Context): Unit =
+              if (c.owner eq c.outer.owner) markAsMacro(c.outer)
+              else if (c.owner.isInlineMethod) c.owner.setFlag(Macro)
+              else if (!c.outer.owner.is(Package)) markAsMacro(c.outer)
+            markAsMacro(ctx)
+          }
+          typedApply(untpd.Apply(untpd.ref(defn.InternalQuoted_exprSpliceR), tree.expr), pt)(spliceContext).withSpan(tree.span)
+        }
     }
   }
 
   /** Translate ${ t: Type[T] }` into type `t.splice` while tracking the quotation level in the context */
   def typedTypSplice(tree: untpd.TypSplice, pt: Type)(implicit ctx: Context): Tree = track("typedTypSplice") {
+    ctx.compilationUnit.needsStaging = true
     checkSpliceOutsideQuote(tree)
     typedSelect(untpd.Select(tree.expr, tpnme.splice), pt)(spliceContext).withSpan(tree.span)
   }
@@ -2096,7 +2205,7 @@ class Typer extends Namer
 
   protected def makeContextualFunction(tree: untpd.Tree, pt: Type)(implicit ctx: Context): Tree = {
     val defn.FunctionOf(formals, _, true, _) = pt.dropDependentRefinement
-    val ifun = desugar.makeContextualFunction(formals, tree)
+    val ifun = desugar.makeContextualFunction(formals, tree, defn.isErasedFunctionType(pt))
     typr.println(i"make contextual function $tree / $pt ---> $ifun")
     typed(ifun, pt)
   }
@@ -2160,6 +2269,10 @@ class Typer extends Namer
         }
       case Thicket(stats) :: rest =>
         traverse(stats ++ rest)
+      case (stat: untpd.Export) :: rest =>
+        buf ++= stat.attachmentOrElse(ExportForwarders, Nil)
+          // no attachment can happen in case of cyclic references
+        traverse(rest)
       case stat :: rest =>
         val stat1 = typed(stat)(ctx.exprContext(stat, exprOwner))
         checkStatementPurity(stat1)(stat, exprOwner)
@@ -2485,32 +2598,6 @@ class Typer extends Namer
       }
     }
 
-    /** If `tp` is a TypeVar which is fully constrained (i.e. its upper bound `hi` conforms
-     *  to its lower bound `lo`), replace `tp` by `hi`. This is necessary to
-     *  keep the right constraints for some implicit search problems. The paradigmatic case
-     *  is `implicitNums.scala`. Without the healing done in `followAlias`, we cannot infer
-     *  implicitly[_3], where _2 is the typelevel number 3. The problem here is that if a
-     *  prototype is, say, Succ[Succ[Zero]], we can infer that it's argument type is Succ[Zero].
-     *  But if the prototype is N? >: Succ[Succ[Zero]] <: Succ[Succ[Zero]], the same
-     *  decomposition does not work - we'd get a N?#M where M is the element type name of Succ
-     *  instead.
-     */
-    def followAlias(tp: Type)(implicit ctx: Context): Type = {
-      val constraint = ctx.typerState.constraint
-      def inst(tp: Type): Type = tp match {
-        case TypeBounds(lo, hi)
-        if (lo eq hi) || ctx.test(implicit ctx => hi <:< lo) =>
-          inst(lo)
-        case tp: TypeParamRef =>
-          constraint.typeVarOfParam(tp).orElse(tp)
-        case _ => tp
-      }
-      tp match {
-        case tp: TypeVar if constraint.contains(tp) => inst(constraint.entry(tp.origin))
-        case _ => tp
-      }
-    }
-
     /** Reveal ignored parts of prototype when synthesizing the receiver
      *  of an extension method. This is necessary for pos/i5773a.scala
      */
@@ -2706,7 +2793,25 @@ class Typer extends Namer
                !ctx.isAfterTyper &&
                !ctx.reporter.hasErrors) {
         tree.tpe <:< wildApprox(pt)
-        readaptSimplified(Inliner.inlineCall(tree, pt))
+        readaptSimplified(Inliner.inlineCall(tree))
+      }
+      else if (tree.symbol.isScala2Macro) {
+        if (ctx.settings.XignoreScala2Macros.value) {
+          ctx.warning("Scala 2 macro cannot be used in Dotty, this call will crash at runtime. See http://dotty.epfl.ch/docs/reference/dropped-features/macros.html", tree.sourcePos)
+          Throw(New(defn.MatchErrorType, Literal(Constant(s"Reached unexpanded Scala 2 macro call to ${tree.symbol.showFullName} compiled with -Xignore-scala2-macros.")) :: Nil)).withSpan(tree.span)
+        } else if (tree.symbol eq defn.StringContext_f) {
+          // As scala.StringContext.f is defined in the standard library which
+          // we currently do not bootstrap we cannot implement the macro the library.
+          // To overcome the current limitation we intercept the call and rewrite it into
+          // a call to dotty.internal.StringContext.f which we can implement using the new macros.
+          // As the macro is implemented in the bootstrapped library, it can only be used from the bootstrapped compiler.
+          val Apply(TypeApply(Select(sc, _), _), args) = tree
+          val newCall = ref(defn.InternalStringContextModule_f).appliedTo(sc).appliedToArgs(args)
+          readaptSimplified(Inliner.inlineCall(newCall))
+        } else {
+          ctx.error("Scala 2 macro cannot be used in Dotty. See http://dotty.epfl.ch/docs/reference/dropped-features/macros.html", tree.sourcePos)
+          tree
+        }
       }
       else if (tree.tpe <:< pt) {
         if (pt.hasAnnotation(defn.InlineParamAnnot))
@@ -2741,7 +2846,7 @@ class Typer extends Namer
     }
 
     def resultMatches(wtp: Type, pt: Type) =
-      constrainResult(tree.symbol, wtp, revealProtoOfExtMethod(followAlias(pt)))
+      constrainResult(tree.symbol, wtp, revealProtoOfExtMethod(pt))
 
     def adaptNoArgs(wtp: Type): Tree = {
       val ptNorm = underlyingApplied(pt)

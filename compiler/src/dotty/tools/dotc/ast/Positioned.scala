@@ -24,7 +24,13 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Pro
   def uniqueId: Int = myUniqueId
 
   def uniqueId_=(id: Int): Unit = {
-    //assert(id != 2523, this)
+    if (Positioned.debugId == id) {
+      def printTrace() = {
+        val stack = Thread.currentThread().getStackTrace().map(">   " + _)
+        System.err.println(stack.mkString(s"> Debug tree (id=${Positioned.debugId}) creation \n> $this\n", "\n", "\n"))
+      }
+      printTrace()
+    }
     myUniqueId = id
   }
 
@@ -224,5 +230,13 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Pro
     case ex: AssertionError =>
       println(i"error while checking $this")
       throw ex
+  }
+}
+
+object Positioned {
+  @sharable private[Positioned] var debugId = Int.MinValue
+
+  def updateDebugPos(implicit ctx: Context): Unit = {
+    debugId = ctx.settings.YdebugTreeWithId.value
   }
 }

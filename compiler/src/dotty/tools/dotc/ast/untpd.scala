@@ -93,7 +93,7 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
     override def isType: Boolean = !isTerm
   }
   case class Throw(expr: Tree)(implicit @constructorOnly src: SourceFile) extends TermTree
-  case class Quote(t: Tree)(implicit @constructorOnly src: SourceFile) extends TermTree
+  case class Quote(quoted: Tree)(implicit @constructorOnly src: SourceFile) extends TermTree
   case class Splice(expr: Tree)(implicit @constructorOnly src: SourceFile) extends TermTree
   case class TypSplice(expr: Tree)(implicit @constructorOnly src: SourceFile) extends TypTree
   case class DoWhile(body: Tree, cond: Tree)(implicit @constructorOnly src: SourceFile) extends TermTree
@@ -103,6 +103,9 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
   case class GenAlias(pat: Tree, expr: Tree)(implicit @constructorOnly src: SourceFile) extends Tree
   case class ContextBounds(bounds: TypeBoundsTree, cxBounds: List[Tree])(implicit @constructorOnly src: SourceFile) extends TypTree
   case class PatDef(mods: Modifiers, pats: List[Tree], tpt: Tree, rhs: Tree)(implicit @constructorOnly src: SourceFile) extends DefTree
+  case class Export(impliedOnly: Boolean, expr: Tree, selectors: List[Tree])(implicit @constructorOnly src: SourceFile) extends Tree
+
+  /** Short-lived usage in typer, does not need copy/transform/fold infrastructure */
   case class DependentTypeTree(tp: List[Symbol] => Type)(implicit @constructorOnly src: SourceFile) extends Tree
 
   @sharable object EmptyTypeIdent extends Ident(tpnme.EMPTY)(NoSource) with WithoutTypeOrPos[Untyped] {
@@ -318,7 +321,9 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
   def Alternative(trees: List[Tree])(implicit src: SourceFile): Alternative = new Alternative(trees)
   def UnApply(fun: Tree, implicits: List[Tree], patterns: List[Tree])(implicit src: SourceFile): UnApply = new UnApply(fun, implicits, patterns)
   def ValDef(name: TermName, tpt: Tree, rhs: LazyTree)(implicit src: SourceFile): ValDef = new ValDef(name, tpt, rhs)
+  def BackquotedValDef(name: TermName, tpt: Tree, rhs: LazyTree)(implicit src: SourceFile): ValDef = new BackquotedValDef(name, tpt, rhs)
   def DefDef(name: TermName, tparams: List[TypeDef], vparamss: List[List[ValDef]], tpt: Tree, rhs: LazyTree)(implicit src: SourceFile): DefDef = new DefDef(name, tparams, vparamss, tpt, rhs)
+  def BackquotedDefDef(name: TermName, tparams: List[TypeDef], vparamss: List[List[ValDef]], tpt: Tree, rhs: LazyTree)(implicit src: SourceFile): DefDef = new BackquotedDefDef(name, tparams, vparamss, tpt, rhs)
   def TypeDef(name: TypeName, rhs: Tree)(implicit src: SourceFile): TypeDef = new TypeDef(name, rhs)
   def Template(constr: DefDef, parents: List[Tree], derived: List[Tree], self: ValDef, body: LazyTreeList)(implicit src: SourceFile): Template =
     if (derived.isEmpty) new Template(constr, parents, self, body)
@@ -403,8 +408,12 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
   def makeAndType(left: Tree, right: Tree)(implicit ctx: Context): AppliedTypeTree =
     AppliedTypeTree(ref(defn.andType.typeRef), left :: right :: Nil)
 
-  def makeParameter(pname: TermName, tpe: Tree, mods: Modifiers = EmptyModifiers)(implicit ctx: Context): ValDef =
-    ValDef(pname, tpe, EmptyTree).withMods(mods | Param)
+  def makeParameter(pname: TermName, tpe: Tree, mods: Modifiers = EmptyModifiers, isBackquoted: Boolean = false)(implicit ctx: Context): ValDef = {
+    val vdef =
+      if (isBackquoted) BackquotedValDef(pname, tpe, EmptyTree)
+      else ValDef(pname, tpe, EmptyTree)
+    vdef.withMods(mods | Param)
+  }
 
   def makeSyntheticParameter(n: Int = 1, tpt: Tree = null, flags: FlagSet = EmptyFlags)(implicit ctx: Context): ValDef =
     ValDef(nme.syntheticParamName(n), if (tpt == null) TypeTree() else tpt, EmptyTree)
@@ -492,9 +501,9 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
       case tree: Throw if expr eq tree.expr => tree
       case _ => finalize(tree, untpd.Throw(expr)(tree.source))
     }
-    def Quote(tree: Tree)(t: Tree)(implicit ctx: Context): Tree = tree match {
-      case tree: Quote if t eq tree.t => tree
-      case _ => finalize(tree, untpd.Quote(t)(tree.source))
+    def Quote(tree: Tree)(quoted: Tree)(implicit ctx: Context): Tree = tree match {
+      case tree: Quote if quoted eq tree.quoted => tree
+      case _ => finalize(tree, untpd.Quote(quoted)(tree.source))
     }
     def Splice(tree: Tree)(expr: Tree)(implicit ctx: Context): Tree = tree match {
       case tree: Splice if expr eq tree.expr => tree
@@ -531,6 +540,10 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
     def PatDef(tree: Tree)(mods: Modifiers, pats: List[Tree], tpt: Tree, rhs: Tree)(implicit ctx: Context): Tree = tree match {
       case tree: PatDef if (mods eq tree.mods) && (pats eq tree.pats) && (tpt eq tree.tpt) && (rhs eq tree.rhs) => tree
       case _ => finalize(tree, untpd.PatDef(mods, pats, tpt, rhs)(tree.source))
+    }
+    def Export(tree: Tree)(impliedOnly: Boolean, expr: Tree, selectors: List[Tree])(implicit ctx: Context): Tree = tree match {
+      case tree: Export if (impliedOnly == tree.impliedOnly) && (expr eq tree.expr) && (selectors eq tree.selectors) => tree
+      case _ => finalize(tree, untpd.Export(impliedOnly, expr, selectors)(tree.source))
     }
     def TypedSplice(tree: Tree)(splice: tpd.Tree)(implicit ctx: Context): ProxyTree = tree match {
       case tree: TypedSplice if splice `eq` tree.splice => tree
@@ -584,6 +597,8 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
         cpy.ContextBounds(tree)(transformSub(bounds), transform(cxBounds))
       case PatDef(mods, pats, tpt, rhs) =>
         cpy.PatDef(tree)(mods, transform(pats), transform(tpt), transform(rhs))
+      case Export(impliedOnly, expr, selectors) =>
+        cpy.Export(tree)(impliedOnly, transform(expr), selectors)
       case TypedSplice(_) =>
         tree
       case _ =>
@@ -637,6 +652,8 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
         this(this(x, bounds), cxBounds)
       case PatDef(mods, pats, tpt, rhs) =>
         this(this(this(x, pats), tpt), rhs)
+      case Export(_, expr, _) =>
+        this(x, expr)
       case TypedSplice(splice) =>
         this(x, splice)
       case _ =>

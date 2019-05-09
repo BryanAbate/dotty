@@ -112,7 +112,7 @@ abstract class TokensCommon {
   //final val SUPERTYPE = 81;        enter(SUPERTYPE, ">:")
   //final val HASH = 82;             enter(HASH, "#")
   final val AT = 83;               enter(AT, "@")
-  //final val VIEWBOUND = 84;        enter(VIEWBOUND, "<%") // TODO: deprecate
+  //final val VIEWBOUND = 84;        enter(VIEWBOUND, "<%")
 
   val keywords: TokenSet
 
@@ -180,7 +180,8 @@ object Tokens extends TokensCommon {
   final val ERASED = 63;           enter(ERASED, "erased")
   final val IMPLIED = 64;          enter(IMPLIED, "implied")
   final val GIVEN = 65;            enter(GIVEN, "given")
-  final val MACRO = 66;            enter(MACRO, "macro") // TODO: remove
+  final val EXPORT = 66;           enter(EXPORT, "export")
+  final val MACRO = 67;            enter(MACRO, "macro") // TODO: remove
 
   /** special symbols */
   final val NEWLINE = 78;          enter(NEWLINE, "end of statement", "new line")
@@ -193,7 +194,7 @@ object Tokens extends TokensCommon {
   final val SUBTYPE = 80;          enter(SUBTYPE, "<:")
   final val SUPERTYPE = 81;        enter(SUPERTYPE, ">:")
   final val HASH = 82;             enter(HASH, "#")
-  final val VIEWBOUND = 84;        enter(VIEWBOUND, "<%") // TODO: deprecate
+  final val VIEWBOUND = 84;        enter(VIEWBOUND, "<%")
   final val QUOTE = 85;            enter(QUOTE, "'")
 
   /** XML mode */
@@ -239,8 +240,10 @@ object Tokens extends TokensCommon {
 
   final val modifierFollowers = modifierTokens | defIntroTokens
 
+  final val paramIntroTokens: TokenSet = modifierTokens | identifierTokens | BitSet(AT, VAL, VAR, IMPLICIT)
+
   /** Is token only legal as start of statement (eof also included)? */
-  final val mustStartStatTokens: TokenSet = defIntroTokens | modifierTokens | BitSet(IMPORT, PACKAGE)
+  final val mustStartStatTokens: TokenSet = defIntroTokens | modifierTokens | BitSet(IMPORT, EXPORT, PACKAGE)
 
   final val canStartStatTokens: TokenSet = canStartExpressionTokens | mustStartStatTokens | BitSet(
     AT, CASE)

@@ -46,7 +46,14 @@ object Splicer {
       }
       catch {
         case ex: scala.quoted.QuoteError =>
-          ctx.error(ex.getMessage, pos)
+          val pos1 = ex.from match {
+            case None => pos
+            case Some(expr) =>
+              val reflect: scala.tasty.Reflection = ReflectionImpl(ctx)
+              import reflect._
+              expr.unseal.underlyingArgument.pos.asInstanceOf[SourcePosition]
+          }
+          ctx.error(ex.getMessage, pos1)
           EmptyTree
         case NonFatal(ex) =>
           val msg =
@@ -356,7 +363,7 @@ object Splicer {
         interpretTree(expr)(newEnv)
       case NamedArg(_, arg) => interpretTree(arg)
 
-      case Inlined(EmptyTree, Nil, expansion) => interpretTree(expansion)
+      case Inlined(_, Nil, expansion) => interpretTree(expansion)
 
       case Typed(expr, _) =>
         interpretTree(expr)

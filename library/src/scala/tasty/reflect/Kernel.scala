@@ -40,7 +40,7 @@ package scala.tasty.reflect
  *           +- TypeTree ----+- Inferred
  *           |               +- TypeIdent
  *           |               +- TypeSelect
- *           |               +- Project
+ *           |               +- Projection
  *           |               +- Singleton
  *           |               +- Refined
  *           |               +- Applied
@@ -61,6 +61,7 @@ package scala.tasty.reflect
  *               +- Unapply
  *               +- Alternatives
  *               +- TypeTest
+ *               +- WildcardPattern
  *
  *
  *                   +- NoPrefix
@@ -138,6 +139,16 @@ trait Kernel {
 
   /** Returns the source file being compiled. The path is relative to the current working directory. */
   def Context_source(self: Context): java.nio.file.Path
+
+  /** Returns true if the generated strings are allowed to use colors */
+  def Context_printColors(self: Context): Boolean
+
+  /** Returns a new context where printColors is true */
+  def Context_withColors(self: Context): Context
+
+  /** Returns a new context where printColors is false */
+  def Context_withoutColors(self: Context): Context
+
 
   //
   // REPORTING
@@ -294,6 +305,8 @@ trait Kernel {
 
   /** Tree representing a reference to definition */
   type Ref <: Term
+
+  def matchRef(tree: Tree)(implicit ctx: Context): Option[Ref]
 
   def Ref_apply(sym: Symbol)(implicit ctx: Context): Ref
 
@@ -789,6 +802,13 @@ trait Kernel {
   def Pattern_TypeTest_module_apply(tpt: TypeTree)(implicit ctx: Context): TypeTest
   def Pattern_TypeTest_module_copy(original: TypeTest)(tpt: TypeTree)(implicit ctx: Context): TypeTest
 
+  /** Pattern representing a `_` pattern */
+  type WildcardPattern <: Pattern
+
+  def matchPattern_WildcardPattern(pattern: Pattern)(implicit ctx: Context): Option[WildcardPattern]
+
+  def Pattern_WildcardPattern_module_apply(tpe: TypeOrBounds)(implicit ctx: Context): WildcardPattern
+
   //
   // TYPES
   //
@@ -841,6 +861,9 @@ trait Kernel {
   def Type_isSingleton(self: Type)(implicit ctx: Context): Boolean
 
   def Type_memberType(self: Type)(member: Symbol)(implicit ctx: Context): Type
+
+  /** Is this type an instance of a non-bottom subclass of the given class `cls`? */
+  def Type_derivesFrom(self: Type)(cls: ClassDefSymbol)(implicit ctx: Context): Boolean
 
   /** A singleton type representing a known constant value */
   type ConstantType <: Type
@@ -1336,6 +1359,7 @@ trait Kernel {
   /** Intersection of the two flag sets */
   def Flags_and(self: Flags)(that: Flags): Flags
 
+  def Flags_EmptyFlags: Flags
   def Flags_Private: Flags
   def Flags_Protected: Flags
   def Flags_Abstract: Flags
@@ -1343,6 +1367,7 @@ trait Kernel {
   def Flags_Sealed: Flags
   def Flags_Case: Flags
   def Flags_Implicit: Flags
+  def Flags_Given: Flags
   def Flags_Implied: Flags
   def Flags_Erased: Flags
   def Flags_Lazy: Flags
@@ -1375,16 +1400,20 @@ trait Kernel {
   // QUOTED SEAL/UNSEAL
   //
 
-  /** View this expression `Expr[_]` as a `Term` */
+  /** View this expression `quoted.Expr[_]` as a `Term` */
   def QuotedExpr_unseal(self: scala.quoted.Expr[_])(implicit ctx: Context): Term
 
-  /** View this expression `Type[T]` as a `TypeTree` */
+  /** Checked cast to a `quoted.Expr[U]` */
+  def QuotedExpr_cast[U](self: scala.quoted.Expr[_])(implicit tp: scala.quoted.Type[U], ctx: Context): scala.quoted.Expr[U]
+
+  /** View this expression `quoted.Type[T]` as a `TypeTree` */
   def QuotedType_unseal(self: scala.quoted.Type[_])(implicit ctx: Context): TypeTree
 
-  /** Convert `Term` to an `Expr[T]` and check that it conforms to `T` */
-  def QuotedExpr_seal[T](self: Term)(tpe: scala.quoted.Type[T])(implicit ctx: Context): scala.quoted.Expr[T]
+  /** Convert `Term` to an `quoted.Expr[Any]` */
+  def QuotedExpr_seal(self: Term)(implicit ctx: Context): scala.quoted.Expr[Any]
 
-  /** Convert `Type` to an `quoted.Type[T]` */
+
+  /** Convert `Type` to an `quoted.Type[_]` */
   def QuotedType_seal(self: Type)(implicit ctx: Context): scala.quoted.Type[_]
 
   //
@@ -1428,7 +1457,7 @@ trait Kernel {
   def Definitions_Array_length: Symbol
   def Definitions_Array_update: Symbol
 
-  def Definitions_RepeatedParamClass: Symbol
+  def Definitions_RepeatedParamClass: ClassDefSymbol
 
   def Definitions_OptionClass: Symbol
   def Definitions_NoneModule: Symbol
@@ -1439,6 +1468,12 @@ trait Kernel {
   def Definitions_FunctionClass(arity: Int, isImplicit: Boolean = false, isErased: Boolean = false): Symbol
 
   def Definitions_TupleClass(arity: Int): Symbol
+
+  /** Symbol of scala.internal.Quoted.patternHole */
+  def Definitions_InternalQuoted_patternHole: Symbol
+
+  /** Symbol of scala.internal.Quoted.patternBindHole */
+  def Definitions_InternalQuoted_patternBindHoleAnnot: Symbol
 
   def Definitions_UnitType: Type
   def Definitions_ByteType: Type
