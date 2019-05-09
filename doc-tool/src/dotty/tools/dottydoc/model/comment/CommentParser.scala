@@ -10,7 +10,7 @@ import dotty.tools.dotc.core.Decorators._
 import scala.collection.mutable
 import dotty.tools.dotc.config.Printers.dottydoc
 import scala.util.matching.Regex
-import com.vladsch.flexmark.util.ast.{ Node => MarkdownNode }
+import com.vladsch.flexmark.ast.{ Node => MarkdownNode }
 import com.vladsch.flexmark.parser.{ Parser => MarkdownParser }
 
 trait CommentParser extends util.MemberLookup {
