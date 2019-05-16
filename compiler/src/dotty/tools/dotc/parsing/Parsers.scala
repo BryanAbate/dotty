@@ -549,8 +549,8 @@ object Parsers {
     /**   operand { infixop operand | ‘given’ (operand | ParArgumentExprs) } [postfixop],
      *
      *  respecting rules of associativity and precedence.
-     *  @param notAnOperator  a token that does not count as operator.
-     *  @param maybePostfix   postfix operators are allowed.
+     *  @param isOperator    the current token counts as an operator.
+     *  @param maybePostfix  postfix operators are allowed.
      */
     def infixOps(
         first: Tree, canStartOperand: Token => Boolean, operand: () => Tree,
@@ -1037,6 +1037,11 @@ object Parsers {
       else if (in.token == LBRACE)
         atSpan(in.offset) { RefinedTypeTree(EmptyTree, refinement()) }
       else if (isSimpleLiteral) { SingletonTypeTree(literal()) }
+      else if (isIdent(nme.raw.MINUS) && in.lookaheadIn(numericLitTokens)) {
+        val start = in.offset
+        in.nextToken()
+        SingletonTypeTree(literal(negOffset = start))
+      }
       else if (in.token == USCORE) {
         val start = in.skipToken()
         typeBounds().withSpan(Span(start, in.lastOffset, start))
@@ -1720,18 +1725,28 @@ object Parsers {
      */
     def enumerator(): Tree =
       if (in.token == IF) guard()
+      else if (in.token == CASE) generator()
       else {
         val pat = pattern1()
         if (in.token == EQUALS) atSpan(startOffset(pat), in.skipToken()) { GenAlias(pat, expr()) }
-        else generatorRest(pat)
+        else generatorRest(pat, casePat = false)
       }
 
-    /** Generator   ::=  Pattern `<-' Expr
+    /** Generator   ::=  [‘case’] Pattern `<-' Expr
      */
-    def generator(): Tree = generatorRest(pattern1())
+    def generator(): Tree = {
+      val casePat = if (in.token == CASE) { in.skipCASE(); true } else false
+      generatorRest(pattern1(), casePat)
+    }
 
-    def generatorRest(pat: Tree): GenFrom =
-      atSpan(startOffset(pat), accept(LARROW)) { GenFrom(pat, expr()) }
+    def generatorRest(pat: Tree, casePat: Boolean): GenFrom =
+      atSpan(startOffset(pat), accept(LARROW)) {
+        val checkMode =
+          if (casePat) GenCheckMode.FilterAlways
+          else if (ctx.settings.strict.value) GenCheckMode.Check
+          else GenCheckMode.FilterNow  // filter for now, to keep backwards compat
+        GenFrom(pat, expr(), checkMode)
+      }
 
     /** ForExpr  ::= `for' (`(' Enumerators `)' | `{' Enumerators `}')
      *                {nl} [`yield'] Expr
@@ -1744,16 +1759,20 @@ object Parsers {
         else if (in.token == LPAREN) {
           val lparenOffset = in.skipToken()
           openParens.change(LPAREN, 1)
-          val pats = patternsOpt()
-          val pat =
-            if (in.token == RPAREN || pats.length > 1) {
-              wrappedEnums = false
-              accept(RPAREN)
-              openParens.change(LPAREN, -1)
-              atSpan(lparenOffset) { makeTupleOrParens(pats) } // note: alternatives `|' need to be weeded out by typer.
+          val res =
+            if (in.token == CASE) enumerators()
+            else {
+              val pats = patternsOpt()
+              val pat =
+                if (in.token == RPAREN || pats.length > 1) {
+                  wrappedEnums = false
+                  accept(RPAREN)
+                  openParens.change(LPAREN, -1)
+                  atSpan(lparenOffset) { makeTupleOrParens(pats) } // note: alternatives `|' need to be weeded out by typer.
+                }
+                else pats.head
+              generatorRest(pat, casePat = false) :: enumeratorsRest()
             }
-            else pats.head
-          val res = generatorRest(pat) :: enumeratorsRest()
           if (wrappedEnums) {
             accept(RPAREN)
             openParens.change(LPAREN, -1)
@@ -1914,8 +1933,8 @@ object Parsers {
       if (in.token == RPAREN) Nil else patterns()
 
 
-    /** ArgumentPatterns  ::=  `(' [Patterns] `)'
-     *                      |  `(' [Patterns `,'] Pattern2 `:' `_' `*' ')
+    /** ArgumentPatterns  ::=  ‘(’ [Patterns] ‘)’
+     *                      |  ‘(’ [Patterns ‘,’] Pattern2 ‘:’ ‘_’ ‘*’ ‘)’
      */
     def argumentPatterns(): List[Tree] =
       inParens(patternsOpt())
@@ -2065,18 +2084,18 @@ object Parsers {
 
  /* -------- PARAMETERS ------------------------------------------- */
 
-    /** ClsTypeParamClause::=  `[' ClsTypeParam {`,' ClsTypeParam} `]'
-     *  ClsTypeParam      ::=  {Annotation} [`+' | `-']
+    /** ClsTypeParamClause::=  ‘[’ ClsTypeParam {‘,’ ClsTypeParam} ‘]’
+     *  ClsTypeParam      ::=  {Annotation} [‘+’ | ‘-’]
      *                         id [HkTypeParamClause] TypeParamBounds
      *
-     *  DefTypeParamClause::=  `[' DefTypeParam {`,' DefTypeParam} `]'
+     *  DefTypeParamClause::=  ‘[’ DefTypeParam {‘,’ DefTypeParam} ‘]’
      *  DefTypeParam      ::=  {Annotation} id [HkTypeParamClause] TypeParamBounds
      *
-     *  TypTypeParamCaluse::=  `[' TypTypeParam {`,' TypTypeParam} `]'
+     *  TypTypeParamCaluse::=  ‘[’ TypTypeParam {‘,’ TypTypeParam} ‘]’
      *  TypTypeParam      ::=  {Annotation} id [HkTypePamClause] TypeBounds
      *
-     *  HkTypeParamClause ::=  `[' HkTypeParam {`,' HkTypeParam} `]'
-     *  HkTypeParam       ::=  {Annotation} ['+' | `-'] (id [HkTypePamClause] | _') TypeBounds
+     *  HkTypeParamClause ::=  ‘[’ HkTypeParam {‘,’ HkTypeParam} ‘]’
+     *  HkTypeParam       ::=  {Annotation} [‘+’ | ‘-’] (id [HkTypePamClause] | ‘_’) TypeBounds
      */
     def typeParamClause(ownerKind: ParamOwner.Value): List[TypeDef] = inBrackets {
       def typeParam(): TypeDef = {
@@ -2557,8 +2576,8 @@ object Parsers {
       }
     }
 
-    /** TmplDef ::=  ([`case'] ‘class’ | trait’) ClassDef
-     *            |  [`case'] `object' ObjectDef
+    /** TmplDef ::=  ([‘case’] ‘class’ | ‘trait’) ClassDef
+     *            |  [‘case’] ‘object’ ObjectDef
      *            |  ‘enum’ EnumDef
      *            |  ‘instance’ InstanceDef
      */
@@ -2635,11 +2654,7 @@ object Parsers {
      */
     def enumCase(start: Offset, mods: Modifiers): DefTree = {
       val mods1 = addMod(mods, atSpan(in.offset)(Mod.Enum())) | Case
-      accept(CASE)
-
-      in.adjustSepRegions(ARROW)
-        // Scanner thinks it is in a pattern match after seeing the `case`.
-        // We need to get it out of that mode by telling it we are past the `=>`
+      in.skipCASE()
 
       atSpan(start, nameStart) {
         val id = termIdent()

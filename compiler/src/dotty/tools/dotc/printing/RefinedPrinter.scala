@@ -116,6 +116,9 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
     super.toTextPrefix(tp)
   }
 
+  override protected def toTextParents(parents: List[Type]): Text =
+    Text(parents.map(toTextLocal).map(typeText), keywordStr(" with "))
+
   override protected def refinementNameString(tp: RefinedType): String =
     if (tp.parent.isInstanceOf[WildcardType] || tp.refinedName == nme.WILDCARD)
       super.refinementNameString(tp)
@@ -212,7 +215,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
       case ErasedValueType(tycon, underlying) =>
         return "ErasedValueType(" ~ toText(tycon) ~ ", " ~ toText(underlying) ~ ")"
       case tp: ClassInfo =>
-        return toTextParents(tp.parents) ~ "{...}"
+        return toTextParents(tp.parents) ~~ "{...}"
       case JavaArrayType(elemtp) =>
         return toText(elemtp) ~ "[]"
       case tp: AnnotatedType if homogenizedView =>
@@ -460,7 +463,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
         changePrec(OrPrec) { toText(trees, " | ") }
       case UnApply(fun, implicits, patterns) =>
         val extractor = fun match {
-          case Select(extractor, nme.unapply) => extractor
+          case Select(extractor, name) if name.isUnapplyName => extractor
           case _ => fun
         }
         toTextLocal(extractor) ~
@@ -567,7 +570,8 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
         forText(enums, expr, keywordStr(" yield "))
       case ForDo(enums, expr) =>
         forText(enums, expr, keywordStr(" do "))
-      case GenFrom(pat, expr) =>
+      case GenFrom(pat, expr, checkMode) =>
+        (Str("case ") provided checkMode == untpd.GenCheckMode.FilterAlways) ~
         toText(pat) ~ " <- " ~ toText(expr)
       case GenAlias(pat, expr) =>
         toText(pat) ~ " = " ~ toText(expr)
@@ -825,14 +829,21 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
         case info: ImportType => return s"import $info.expr.show"
         case _ =>
       }
-    if (sym.is(ModuleClass)) {
-      val name =
-        if (sym.isPackageObject && sym.name.stripModuleClassSuffix == tpnme.PACKAGE) sym.owner.name
-        else sym.name.stripModuleClassSuffix
-      kindString(sym) ~~ (nameString(name) + idString(sym))
-    }
-    else
-      super.toText(sym)
+    def name =
+      if (sym.is(ModuleClass) && sym.isPackageObject && sym.name.stripModuleClassSuffix == tpnme.PACKAGE)
+        nameString(sym.owner.name)
+      else if (sym.is(ModuleClass))
+        nameString(sym.name.stripModuleClassSuffix)
+      else if (hasMeaninglessName(sym))
+        simpleNameString(sym.owner)
+      else
+        nameString(sym)
+    (keywordText(kindString(sym)) ~~ {
+      if (sym.isAnonymousClass)
+        toTextParents(sym.info.parents) ~~ "{...}"
+      else
+        typeText(name)
+    }).close
   }
 
   /** String representation of symbol's kind. */

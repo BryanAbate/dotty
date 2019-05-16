@@ -177,7 +177,8 @@ class CompilationTests extends ParallelTesting {
         "tests/neg-custom-args/toplevel-samesource/S.scala",
         "tests/neg-custom-args/toplevel-samesource/nested/S.scala"),
         defaultOptions),
-      compileFile("tests/neg-custom-args/i6300.scala", allowDeepSubtypes)
+      compileFile("tests/neg-custom-args/i6300.scala", allowDeepSubtypes),
+      compileFile("tests/neg-custom-args/infix.scala", defaultOptions.and("-strict", "-deprecation", "-Xfatal-warnings"))
     ).checkExpectedErrors()
   }
 
@@ -194,7 +195,9 @@ class CompilationTests extends ParallelTesting {
       compileFilesInDir("tests/run-custom-args/Yretain-trees", defaultOptions and "-Yretain-trees"),
       compileFile("tests/run-custom-args/tuple-cons.scala", allowDeepSubtypes),
       compileFile("tests/run-custom-args/i5256.scala", allowDeepSubtypes),
+      compileFile("tests/run-custom-args/fors.scala", defaultOptions and "-strict"),
       compileFile("tests/run-custom-args/no-useless-forwarders.scala", defaultOptions and "-Xmixin-force-forwarders:false"),
+      compileFilesInDir("tests/run-deep-subtype", allowDeepSubtypes),
       compileFilesInDir("tests/run", defaultOptions)
     ).checkRuns()
   }
