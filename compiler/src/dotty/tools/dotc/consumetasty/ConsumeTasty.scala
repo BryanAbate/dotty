@@ -31,7 +31,10 @@ object ConsumeTasty {
         // Loads the classes loaded by this class loader
         // When executing `run` or `test` in sbt the classpath is not in the property java.class.path
         import java.nio.file.Paths
-        val newClasspath = cl.getURLs.map(url => Paths.get(url.toURI).toString)
+        // We need the Scala library jar in the classpath, and for some reason getURLs doesn't include it.  We need to
+        // get it by force.  We get the URL for a class we know is in the Scala library jar and strip off the trailing class.
+        val scalaLibPath = cl.getResoure("scala/math/BigInt$.class").toURI.toString.takeWhile(_!='!')
+        val newClasspath = cl.getURLs.map(url => Paths.get(url.toURI).toString) :+ scalaLibPath
         newClasspath.mkString("", java.io.File.pathSeparator, if (classpath0 == "") "" else java.io.File.pathSeparator + classpath0)
       case _ => classpath0
     }
